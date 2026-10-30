@@ -1,0 +1,38 @@
+# Stack à coller dans le Web editor de Portainer (dépôt public : laisser GITHUB_TOKEN vide).
+services:
+  dockpage:
+    image: python:3.12-alpine
+    container_name: dockpage
+    ports:
+      - "8088:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TITLE=Homelab
+      - PORTAINER_URL=https://192.168.1.210:9443
+      - PORTAINER_TOKEN=COLLE_ICI_TON_JETON
+      - VERIFY_TLS=false
+      # Nom exact de chaque environnement Portainer = adresse IP utilisée pour ses liens
+      - HOSTS=local=192.168.1.210,NAS=192.168.1.XX
+      - APP_URL=https://raw.githubusercontent.com/Kamegrazi56/DockPage/main/app.py
+      # Dépôt privé uniquement : jeton GitHub en lecture seule
+      - GITHUB_TOKEN=
+    volumes:
+      - dockpage-data:/data
+    command:
+      - sh
+      - -c
+      - |
+        python -c "
+        import os, urllib.request as u
+        r = u.Request(os.environ['APP_URL'])
+        t = os.environ.get('GITHUB_TOKEN')
+        if t:
+            r.add_header('Authorization', 'token ' + t)
+        d = u.urlopen(r, timeout=30).read()
+        open('/data/app.py', 'wb').write(d)
+        " || echo "Téléchargement impossible : copie précédente utilisée"
+        exec python /data/app.py
+    restart: unless-stopped
+
+volumes:
+  dockpage-data:
