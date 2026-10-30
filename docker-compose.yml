@@ -1,0 +1,19 @@
+services:
+  portainer-dashboard:
+    image: python:3.12-alpine
+    container_name: portainer-dashboard
+    command: python /app/app.py
+    ports:
+      - "8088:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TITLE=Homelab
+      - PORTAINER_URL=https://192.168.1.210:9443
+      - PORTAINER_TOKEN=COLLE_ICI_TON_JETON
+      - VERIFY_TLS=false
+      # Adresse à utiliser pour les liens de chaque environnement (nom exact dans Portainer)
+      - HOSTS=local=192.168.1.210,NAS=192.168.1.XX
+    volumes:
+      - /opt/portainer-dashboard/app.py:/app/app.py:ro
+      - /opt/portainer-dashboard/data:/data
+    restart: unless-stopped
