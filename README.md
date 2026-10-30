@@ -4,26 +4,26 @@ Tableau de bord web alimenté par l'API de Portainer : il liste automatiquement 
 de tous tes environnements (serveur, NAS…) avec un lien cliquable vers chacun, et reste personnalisable
 (nom, lien, groupe, icône, masquage). Aucune dépendance : Python (bibliothèque standard) dans un conteneur.
 
-## Installation
+## Installation (Portainer, depuis ce dépôt)
 
 1. Dans Portainer : *My account* → *Access tokens* → créer un jeton.
-2. Sur le serveur :
-   ```bash
-   sudo mkdir -p /opt/portainer-dashboard/data
-   ```
-   puis copier `app.py` dans `/opt/portainer-dashboard/app.py`.
-3. Créer une stack Portainer avec `docker-compose.yml` et adapter les variables :
+2. *Stacks* → *Add stack* → nom `dockpage` → méthode **Repository** :
+   - Repository URL : `https://github.com/Kamegrazi56/DockPage`
+   - Reference : `refs/heads/main`
+   - Compose path : `docker-compose.yml`
+   - (dépôt privé : activer *Authentication* et renseigner un jeton GitHub)
+3. Dans *Environment variables*, ajouter :
 
 | Variable | Rôle |
 |---|---|
 | `PORTAINER_URL` | Adresse de Portainer (ex. `https://192.168.1.210:9443`) |
-| `PORTAINER_TOKEN` | Jeton d'accès Portainer (ne jamais le commiter) |
-| `VERIFY_TLS` | `false` pour un certificat auto-signé |
+| `PORTAINER_TOKEN` | Jeton d'accès Portainer (à saisir ici, jamais dans le dépôt) |
 | `HOSTS` | `NomEnvironnement=IP,…` : adresse utilisée pour les liens de chaque environnement |
-| `TITLE` | Titre de la page |
-| `REFRESH_SECONDS` | Intervalle de rafraîchissement (30 par défaut) |
+| `VERIFY_TLS` | `false` (défaut) pour un certificat auto-signé |
+| `TITLE` | Titre de la page (défaut `Homelab`) |
+| `DOCKPAGE_PORT` | Port d'accès (défaut `8088`) |
 
-4. Ouvrir `http://IP_DU_SERVEUR:8088`.
+4. *Deploy the stack* (l'image est construite à partir du `Dockerfile`), puis ouvrir `http://IP_DU_SERVEUR:8088`.
 
 ## Sécurité
 
