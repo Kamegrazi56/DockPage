@@ -32,6 +32,16 @@ prioritaires sur la variable `HOSTS`, qui reste utilisable comme valeur par déf
 Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doit être public
 (GitHub → profil → *Packages* → `dockpage` → *Package settings* → *Change visibility*).
 
+## Ordre d'affichage et icônes
+
+- **Personnaliser** active le mode édition : chaque carte peut être déplacée par glisser-déposer ou avec les flèches ◀ ▶,
+  et les groupes avec les flèches ▲ ▼. L'ordre est enregistré dans `/data/config.json`.
+- **Icônes automatiques** : elles sont déduites du nom de l'image (puis du nom du conteneur) et téléchargées depuis la
+  collection libre [dashboard-icons](https://github.com/homarr-labs/dashboard-icons), puis conservées dans `/data/icons`.
+  Le conteneur a donc besoin d'accéder à `raw.githubusercontent.com` (modifiable avec la variable `ICON_BASE`).
+- Dans *Modifier*, le champ « Icône » accepte un nom de la collection (ex. `jellyfin`), une URL d'image ou un emoji.
+  Vide, la détection automatique s'applique ; sans icône trouvée, un 🐳 est affiché.
+
 ## Sécurité
 
 Le tableau de bord n'a pas d'authentification : à garder sur le réseau local, sans l'exposer sur Internet.
