@@ -4,26 +4,27 @@ Tableau de bord web alimenté par l'API de Portainer : il liste automatiquement 
 de tous tes environnements (serveur, NAS…) avec un lien cliquable vers chacun, et reste personnalisable
 (nom, lien, groupe, icône, masquage). Aucune dépendance : Python (bibliothèque standard) dans un conteneur.
 
-## Installation (Portainer, depuis ce dépôt)
+## Installation (Portainer)
+
+L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.io/kamegrazi56/dockpage:latest`
+à chaque modification de `app.py` ou du `Dockerfile`.
 
 1. Dans Portainer : *My account* → *Access tokens* → créer un jeton.
-2. *Stacks* → *Add stack* → nom `dockpage` → méthode **Repository** :
-   - Repository URL : `https://github.com/Kamegrazi56/DockPage`
-   - Reference : `refs/heads/main`
-   - Compose path : `docker-compose.yml`
-   - (dépôt privé : activer *Authentication* et renseigner un jeton GitHub)
-3. Dans *Environment variables*, ajouter :
+2. *Stacks* → *Add stack* → *Web editor* → coller le contenu de `docker-compose.yml`, puis adapter :
 
 | Variable | Rôle |
 |---|---|
 | `PORTAINER_URL` | Adresse de Portainer (ex. `https://192.168.1.210:9443`) |
-| `PORTAINER_TOKEN` | Jeton d'accès Portainer (à saisir ici, jamais dans le dépôt) |
+| `PORTAINER_TOKEN` | Jeton d'accès Portainer (à saisir dans Portainer, jamais dans le dépôt) |
 | `HOSTS` | `NomEnvironnement=IP,…` : adresse utilisée pour les liens de chaque environnement |
-| `VERIFY_TLS` | `false` (défaut) pour un certificat auto-signé |
-| `TITLE` | Titre de la page (défaut `Homelab`) |
-| `DOCKPAGE_PORT` | Port d'accès (défaut `8088`) |
+| `VERIFY_TLS` | `false` pour un certificat auto-signé |
+| `TITLE` | Titre de la page |
+| `REFRESH_SECONDS` | Intervalle de rafraîchissement (30 par défaut) |
 
-4. *Deploy the stack* (l'image est construite à partir du `Dockerfile`), puis ouvrir `http://IP_DU_SERVEUR:8088`.
+3. Ouvrir `http://IP_DU_SERVEUR:8088`.
+
+Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doit être public
+(GitHub → profil → *Packages* → `dockpage` → *Package settings* → *Change visibility*).
 
 ## Sécurité
 

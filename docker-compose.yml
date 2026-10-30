@@ -1,20 +1,15 @@
 services:
   dockpage:
-    build: .
-    image: dockpage:latest
+    image: ghcr.io/kamegrazi56/dockpage:latest
     container_name: dockpage
-    ports:
-      - "${DOCKPAGE_PORT:-8088}:8080"
     environment:
-      - TITLE=${TITLE:-Homelab}
-      - PORTAINER_URL=${PORTAINER_URL}
-      - PORTAINER_TOKEN=${PORTAINER_TOKEN}
-      - VERIFY_TLS=${VERIFY_TLS:-false}
-      # Adresse utilisée pour les liens de chaque environnement : NomExactPortainer=IP,Autre=IP
-      - HOSTS=${HOSTS:-}
+      - TITLE=Homelab
+      - PORTAINER_URL=https://192.168.1.210:9443
+      - PORTAINER_TOKEN=COLLE_ICI_TON_JETON
+      - VERIFY_TLS=false
+      - HOSTS=local=192.168.1.210,NAS=192.168.1.XX
     volumes:
-      - dockpage-data:/data
+      - /home/kamegrazi/docker/dockpage/data:/data
+    ports:
+      - "8088:8080"
     restart: unless-stopped
-
-volumes:
-  dockpage-data:
