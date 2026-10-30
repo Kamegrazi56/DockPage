@@ -23,6 +23,12 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 
 3. Ouvrir `http://IP_DU_SERVEUR:8088`.
 
+## Environnements (serveur, NAS…)
+
+Le bouton **Environnements** liste ceux détectés dans Portainer, avec l'adresse actuellement utilisée pour les liens
+et sa provenance. Pour chacun, on peut définir un nom affiché et une adresse IP (ou nom d'hôte). Ces réglages sont
+prioritaires sur la variable `HOSTS`, qui reste utilisable comme valeur par défaut.
+
 Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doit être public
 (GitHub → profil → *Packages* → `dockpage` → *Package settings* → *Change visibility*).
 
