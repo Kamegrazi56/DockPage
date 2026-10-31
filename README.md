@@ -29,6 +29,7 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 - Sections repliables (l'état est mémorisé dans le navigateur) et recherche rapide (touche `/` pour y accéder, `Échap` pour l'effacer).
 - Thème clair ou sombre : suit le système par défaut, modifiable avec le bouton en haut à droite (choix mémorisé).
 - Messages d'erreur explicites (jeton refusé, Portainer injoignable, environnement hors ligne).
+- Le bouton **Actualiser** relit Portainer immédiatement (sinon, la lecture automatique a lieu toutes les `REFRESH_SECONDS` secondes, 30 par défaut).
 - Toute la personnalisation (catégories, environnements, ordre, icônes) est regroupée derrière le bouton **Personnaliser**.
 
 ## Environnements (serveur, NAS…)

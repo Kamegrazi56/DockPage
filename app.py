@@ -198,16 +198,20 @@ def icon_file(cands):
     return None
 
 
+refresh_lock = threading.Lock()  # une seule lecture de Portainer à la fois (cycle automatique ou bouton)
+
+
 def refresh():
-    try:
-        if not PORTAINER_URL or not TOKEN:
-            raise RuntimeError("PORTAINER_URL et PORTAINER_TOKEN doivent être définis")
-        envs = collect()
-        with lock:
-            cache.update(environments=envs, updated=time.strftime("%H:%M:%S"), error=None)
-    except Exception as e:
-        with lock:
-            cache["error"] = str(e)
+    with refresh_lock:
+        try:
+            if not PORTAINER_URL or not TOKEN:
+                raise RuntimeError("PORTAINER_URL et PORTAINER_TOKEN doivent être définis")
+            envs = collect()
+            with lock:
+                cache.update(environments=envs, updated=time.strftime("%H:%M:%S"), error=None)
+        except Exception as e:
+            with lock:
+                cache["error"] = str(e)
 
 
 def refresher():
@@ -258,6 +262,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, "{}")
 
     def do_POST(self):
+        if self.path == "/api/refresh":  # actualisation manuelle : relit Portainer maintenant
+            refresh()
+            return self.send(200, "{}")
         if self.path not in ("/api/item", "/api/envs", "/api/order", "/api/categories", "/api/move"):
             return self.send(404, "{}")
         try:
@@ -355,6 +362,8 @@ h1{margin:0;font-size:1.45rem;line-height:1.2;letter-spacing:-.01em}
 .btn.danger{color:var(--bad)}
 .btn.sm{padding:4px 11px;font-size:.82rem}
 .btn:disabled{opacity:.4;cursor:default}
+#refresh.spin svg{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .icon-btn{width:42px;height:42px;padding:0;justify-content:center}
 .icon-btn svg{width:20px;height:20px}
 
@@ -459,6 +468,8 @@ dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
   <div class="tools">
     <label class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
       <input id="q" type="search" placeholder="Rechercher un service…  ( / )" aria-label="Rechercher un service"></label>
+    <button class="btn" id="refresh" title="Relire Portainer maintenant" aria-label="Actualiser la liste des conteneurs">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg><span id="rlbl">Actualiser</span></button>
     <button class="btn icon-btn" id="theme" title="Changer le thème (clair / sombre)" aria-label="Changer le thème">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
     <button class="btn primary" id="edit">✏️ Personnaliser</button>
@@ -702,6 +713,11 @@ $('#esave').onclick=async()=>{
 /* Barre du haut */
 $('#edit').onclick=()=>{edit=!edit;$('#edit').textContent=edit?'✓ Terminer':'✏️ Personnaliser';$('#edit').classList.toggle('primary',!edit);$('#editbar').hidden=!edit;render()};
 $('#q').oninput=render;
+$('#refresh').onclick=async()=>{
+  const b=$('#refresh'),l=$('#rlbl');b.disabled=true;b.classList.add('spin');l.textContent='Actualisation…';
+  try{await fetch('api/refresh',{method:'POST'});await load();l.textContent='À jour ✓'}
+  catch(e){l.textContent='Échec'}
+  finally{b.disabled=false;b.classList.remove('spin');setTimeout(()=>{l.textContent='Actualiser'},2000)}};
 $('#theme').onclick=()=>{const cur=document.documentElement.dataset.theme||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'),next=cur==='dark'?'light':'dark';
   document.documentElement.dataset.theme=next;store.set('dp-theme',next)};
 document.addEventListener('keydown',e=>{
