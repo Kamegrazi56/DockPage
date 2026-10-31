@@ -23,6 +23,14 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 
 3. Ouvrir `http://IP_DU_SERVEUR:8088`.
 
+## Interface
+
+- Accueil avec salutation, résumé de l'état des services (en marche, à surveiller, arrêtés) et statuts en français.
+- Sections repliables (l'état est mémorisé dans le navigateur) et recherche rapide (touche `/` pour y accéder, `Échap` pour l'effacer).
+- Thème clair ou sombre : suit le système par défaut, modifiable avec le bouton en haut à droite (choix mémorisé).
+- Messages d'erreur explicites (jeton refusé, Portainer injoignable, environnement hors ligne).
+- Toute la personnalisation (catégories, environnements, ordre, icônes) est regroupée derrière le bouton **Personnaliser**.
+
 ## Environnements (serveur, NAS…)
 
 Le bouton **Environnements** liste ceux détectés dans Portainer, avec l'adresse actuellement utilisée pour les liens
