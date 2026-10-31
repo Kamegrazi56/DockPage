@@ -56,6 +56,45 @@ def load_items():
     return load_config().get("items", {})
 
 
+def categories_of(cfg):
+    """Catégories créées à la main, plus les anciens groupes saisis dans « Modifier »."""
+    cats = [c for c in cfg.get("categories", []) if isinstance(c, str)]
+    for it in cfg.get("items", {}).values():
+        g = it.get("group")
+        if g and g not in cats:
+            cats.append(g)
+    return cats
+
+
+def apply_categories(cfg, entries):
+    """entries : [{"name": nouveau nom, "old": ancien nom ou None}] dans l'ordre voulu."""
+    previous = set(categories_of(cfg))
+    names, renames, kept = [], {}, set()
+    for e in entries:
+        name = (e.get("name") or "").strip()[:40]
+        if not name or name.lower() in (n.lower() for n in names):
+            continue
+        names.append(name)
+        old = e.get("old") or name
+        kept.add(old)
+        if old != name:
+            renames[old] = name
+    deleted = previous - kept
+    items = cfg.setdefault("items", {})
+    for key in list(items):
+        g = items[key].get("group")
+        if g in renames:
+            items[key]["group"] = renames[g]
+        elif g in deleted:
+            del items[key]["group"]
+        if not items[key]:
+            del items[key]
+    order = cfg.get("order", {})
+    cfg["order"] = {renames.get(g, g): k for g, k in order.items() if g not in deleted}
+    cfg["groupOrder"] = [renames.get(g, g) for g in cfg.get("groupOrder", []) if g not in deleted]
+    cfg["categories"] = names
+
+
 def clean_host(raw):
     raw = raw.strip()
     return urllib.parse.urlparse(raw if "://" in raw else "//" + raw).hostname or raw
@@ -194,7 +233,8 @@ class Handler(BaseHTTPRequestHandler):
             cfg = load_config()
             with lock:
                 payload = dict(cache, title=TITLE, items=cfg.get("items", {}), envs=cfg.get("envs", {}),
-                               order=cfg.get("order", {}), groupOrder=cfg.get("groupOrder", []))
+                               order=cfg.get("order", {}), groupOrder=cfg.get("groupOrder", []),
+                               categories=categories_of(cfg))
             self.send(200, json.dumps(payload))
         elif self.path.split("?")[0] == "/icon":
             path = icon_file(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("n", []))
@@ -218,12 +258,27 @@ class Handler(BaseHTTPRequestHandler):
             self.send(404, "{}")
 
     def do_POST(self):
-        if self.path not in ("/api/item", "/api/envs", "/api/order"):
+        if self.path not in ("/api/item", "/api/envs", "/api/order", "/api/categories", "/api/move"):
             return self.send(404, "{}")
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
             cfg = load_config()
-            if self.path == "/api/order":
+            if self.path == "/api/categories":
+                apply_categories(cfg, body["categories"])
+            elif self.path == "/api/move":  # range un conteneur dans une catégorie (ou l'en retire si group est vide)
+                items, group = cfg.setdefault("items", {}), body.get("group")
+                item = items.setdefault(body["key"], {})
+                if group:
+                    item["group"] = group
+                    if group not in categories_of(cfg):
+                        cfg.setdefault("categories", []).append(group)
+                    if body.get("keys"):
+                        cfg.setdefault("order", {})[group] = [k for k in body["keys"] if isinstance(k, str)]
+                else:
+                    item.pop("group", None)
+                if not item:
+                    del items[body["key"]]
+            elif self.path == "/api/order":
                 if "groups" in body:  # ordre des groupes
                     cfg["groupOrder"] = [g for g in body["groups"] if isinstance(g, str)]
                 else:  # ordre des conteneurs d'un groupe
@@ -259,7 +314,7 @@ PAGE = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,sans-serif}
 header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:16px;border-bottom:1px solid var(--line)}
 h1{font-size:20px;margin:0 auto 0 0}
-input[type=search],input[type=text],button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+input[type=search],input[type=text],select,button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
 button{cursor:pointer}button.on{border-color:var(--accent);color:var(--accent)}
 label.chk{display:flex;gap:6px;align-items:center;color:var(--muted)}
 main{padding:16px;max-width:1300px;margin:auto}
@@ -268,7 +323,7 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 .card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;display:block;color:inherit;text-decoration:none}
 a.card:hover{border-color:var(--accent)}.card.dim{opacity:.45}.card.nolink{opacity:.8}
 .top{display:flex;align-items:center;gap:8px}.ico{width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:20px;flex:none}.ico img{max-width:26px;max-height:26px;object-fit:contain}
-.card.editing{padding-bottom:36px;cursor:grab}.card.over{outline:2px dashed var(--accent)}.card.drag{opacity:.4}
+.card.editing{padding-bottom:36px;cursor:grab}.over{outline:2px dashed var(--accent);outline-offset:2px}.card.drag{opacity:.4}
 .arrows{position:absolute;left:8px;bottom:6px;display:flex;gap:4px}.arrows button,h2 button{padding:0 7px;font-size:12px;line-height:20px}h2 button{margin-left:6px}.name{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--bad);margin-left:auto;flex:none}.dot.ok{background:var(--ok)}
 .meta{color:var(--muted);font-size:12px;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -276,23 +331,34 @@ a.card:hover{border-color:var(--accent)}.card.dim{opacity:.45}.card.nolink{opaci
 .edit{position:absolute;right:6px;bottom:6px;padding:1px 7px;font-size:12px}
 .msg{padding:10px 14px;border:1px solid var(--bad);border-radius:8px;margin-bottom:12px;color:var(--bad)}
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--text);width:min(420px,92vw)}
-dialog::backdrop{background:#0008}dialog label{display:block;margin:10px 0 4px;color:var(--muted);font-size:13px}dialog input[type=text]{width:100%}
+dialog::backdrop{background:#0008}dialog label{display:block;margin:10px 0 4px;color:var(--muted);font-size:13px}dialog input[type=text],dialog select{width:100%}
+.st{display:flex;justify-content:space-between;gap:6px}.st span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tag{flex:none;border:1px solid var(--line);border-radius:99px;padding:0 7px;font-size:11px;color:var(--muted)}
+.hint{color:var(--muted);font-size:13px;padding:14px;border:1px dashed var(--line);border-radius:10px;grid-column:1/-1}
+.crow{display:flex;gap:6px;margin-top:8px}.crow input{flex:1}
 .row{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 .envbox{border-top:1px solid var(--line);margin-top:12px;padding-top:4px}.envbox .meta{white-space:normal}
 </style></head><body>
 <header><h1>__TITLE__</h1>
 <input id="q" type="search" placeholder="Rechercher…">
 <label class="chk"><input id="nolink" type="checkbox">Sans port</label>
-<button id="envbtn">Environnements</button><button id="edit">Personnaliser</button><span id="upd" class="meta"></span></header>
+<button id="catbtn">Catégories</button><button id="envbtn">Environnements</button><button id="edit">Personnaliser</button><span id="upd" class="meta"></span></header>
 <main><div id="msg"></div><div id="out"></div></main>
 <dialog id="dlg"><form method="dialog" id="f">
 <strong id="dt"></strong>
 <label>Nom affiché</label><input type="text" id="f_name">
 <label>Lien (URL complète)</label><input type="text" id="f_url" placeholder="http://192.168.1.210:3210">
-<label>Groupe</label><input type="text" id="f_group">
+<label>Catégorie</label><select id="f_group"></select>
 <label>Icône (vide = automatique ; sinon nom de la collection, URL d'image ou emoji)</label><input type="text" id="f_icon" placeholder="ex. jellyfin, https://…/logo.png ou 🎬">
 <label class="chk" style="margin-top:12px"><input type="checkbox" id="f_hidden">Masquer ce conteneur</label>
 <div class="row"><button type="button" id="reset">Réinitialiser</button><button type="button" id="cancel">Annuler</button><button id="save" value="ok">Enregistrer</button></div>
+</form></dialog>
+<dialog id="cdlg"><form method="dialog" onsubmit="return false">
+<strong>Catégories</strong>
+<div class="meta" style="white-space:normal;margin-top:4px">Crée tes catégories, renomme-les ou supprime-les. Ensuite, range un conteneur avec « Modifier » (mode Personnaliser) ou en le glissant sur une catégorie. Supprimer une catégorie remet ses conteneurs dans leur environnement.</div>
+<div id="clist"></div>
+<div class="crow"><input type="text" id="cnew" placeholder="Nouvelle catégorie…" maxlength="40"><button type="button" id="cadd">Ajouter</button></div>
+<div class="row"><button type="button" id="cclose">Fermer</button><button type="button" id="csave">Enregistrer</button></div>
 </form></dialog>
 <dialog id="edlg"><form method="dialog" onsubmit="return false">
 <strong>Environnements Portainer</strong>
@@ -317,12 +383,15 @@ function render(){
       if(o.hidden&&!edit)continue;
       if(!url&&!nolink&&!edit)continue;
       if(!edit&&q&&!(c.name+' '+c.image+' '+(o.name||'')).toLowerCase().includes(q))continue;
-      const g=o.group||env.label||env.name;(groups[g]=groups[g]||[]).push({c,o,url});
+      const g=o.group||env.label||env.name;(groups[g]=groups[g]||[]).push({c,o,url,env});
     }
   }
+  const cats=D.categories||[];
+  if(edit)for(const k of cats)groups[k]=groups[k]||[];  // catégories vides visibles pour y glisser des conteneurs
   const out=$('#out');out.replaceChildren();
   const go=D.groupOrder||[],pos=(arr,k)=>{const i=arr.indexOf(k);return i<0?1e9:i};
-  const names=Object.keys(groups).sort((a,b)=>pos(go,a)-pos(go,b)||a.localeCompare(b));
+  const rank=g=>{let i=go.indexOf(g);if(i>=0)return i;i=cats.indexOf(g);return i>=0?1e6+i:1e9};
+  const names=Object.keys(groups).sort((a,b)=>rank(a)-rank(b)||a.localeCompare(b));
   names.forEach((g,gi)=>{
     const h=el('h2',null,g);
     if(edit){for(const [txt,d] of [['▲',-1],['▼',1]]){const b=el('button',null,txt);b.disabled=gi+d<0||gi+d>=names.length;
@@ -331,12 +400,22 @@ function render(){
     const ord=(D.order||{})[g]||[];
     const list=groups[g].sort((a,b)=>pos(ord,a.c.key)-pos(ord,b.c.key)||(a.o.name||a.c.name).localeCompare(b.o.name||b.c.name));
     const keys=list.map(x=>x.c.key),save=k=>post2('api/order',{group:g,keys:k});
-    list.forEach(({c,o,url},i)=>{
+    // déplace un conteneur vers ce groupe : rangé dans la catégorie, ou retiré de sa catégorie si c'est un groupe d'environnement
+    const moveTo=(key,idx)=>{const isCat=cats.includes(g),k=keys.filter(x=>x!==key);k.splice(idx==null?k.length:idx,0,key);
+      post2('api/move',{key,group:isCat?g:null,keys:isCat?k:null})};
+    if(edit){
+      for(const t of [h,grid]){t.ondragover=e=>{e.preventDefault();t.classList.add('over')};t.ondragleave=()=>t.classList.remove('over');
+        t.ondrop=e=>{e.preventDefault();t.classList.remove('over');const dk=e.dataTransfer.getData('text/plain');if(dk&&!keys.includes(dk))moveTo(dk)}}
+      if(!list.length)grid.append(el('div','hint','Glisse un conteneur ici, ou utilise « Modifier » sur une carte.'));
+    }
+    list.forEach(({c,o,url,env},i)=>{
       const card=el(url?'a':'div','card'+(o.hidden?' dim':'')+(url?'':' nolink')+(edit?' editing':''));
       if(url){card.href=url;card.target='_blank';card.rel='noopener'}
       const top=el('div','top');top.append(el('span','ico',null),el('span','name',o.name||c.name),el('span','dot'+(c.state==='running'?' ok':'')));
       fillIcon(top.firstChild,c,o);
-      card.append(top,el('div','meta',c.image),el('div','meta',c.status));
+      const st=el('div','meta st');st.append(el('span',null,c.status));
+      if(o.group)st.append(el('span','tag',env.label||env.name));  // d'où vient un conteneur rangé dans une catégorie
+      card.append(top,el('div','meta',c.image),st);
       if(c.ports.length>1){const p=el('div','ports');for(const x of c.ports){const a=el('a',null,':'+x.port);a.href=x.url;a.target='_blank';a.rel='noopener';p.append(a)}card.append(p)}
       if(edit){
         card.onclick=e=>e.preventDefault();
@@ -350,8 +429,11 @@ function render(){
         card.ondragend=()=>card.classList.remove('drag');
         card.ondragover=e=>{e.preventDefault();card.classList.add('over')};
         card.ondragleave=()=>card.classList.remove('over');
-        card.ondrop=e=>{e.preventDefault();card.classList.remove('over');const from=keys.indexOf(e.dataTransfer.getData('text/plain'));
-          if(from<0||from===i)return;const k=keys.slice();k.splice(i,0,k.splice(from,1)[0]);save(k)};
+        card.ondrop=e=>{e.preventDefault();e.stopPropagation();card.classList.remove('over');
+          const dk=e.dataTransfer.getData('text/plain'),from=keys.indexOf(dk);
+          if(!dk||dk===c.key)return;
+          if(from<0)return moveTo(dk,i);  // vient d'un autre groupe
+          const k=keys.slice();k.splice(i,0,k.splice(from,1)[0]);save(k)};
       }
       grid.append(card);
     });
@@ -371,11 +453,24 @@ function fillIcon(box,c,o){
 }
 async function post2(url,body){await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});load()}
 function open(c,o){cur=c;$('#dt').textContent=c.key;
+  const sel=$('#f_group');sel.replaceChildren(new Option('Aucune (selon l\'environnement)',''));
+  for(const k of D.categories||[])sel.append(new Option(k,k));
   for(const k of ['name','url','group','icon'])$('#f_'+k).value=o[k]||'';
   $('#f_hidden').checked=!!o.hidden;$('#dlg').showModal()}
 async function post(data){await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});$('#dlg').close();load()}
 $('#save').onclick=e=>{e.preventDefault();const d={hidden:$('#f_hidden').checked};for(const k of ['name','url','group','icon'])d[k]=$('#f_'+k).value.trim();post(d)};
 $('#reset').onclick=()=>post(null);$('#cancel').onclick=()=>$('#dlg').close();
+function catRow(name,old){
+  const row=el('div','crow'),i=el('input');i.type='text';i.value=name;i.maxLength=40;i.dataset.old=old||'';
+  const d=el('button',null,'✕');d.type='button';d.title='Supprimer';d.onclick=()=>row.remove();row.append(i,d);return row}
+$('#catbtn').onclick=()=>{const l=$('#clist');l.replaceChildren();for(const k of D.categories||[])l.append(catRow(k,k));$('#cnew').value='';$('#cdlg').showModal()};
+function addCat(){const v=$('#cnew').value.trim();if(v){$('#clist').append(catRow(v,''));$('#cnew').value=''}$('#cnew').focus()}
+$('#cadd').onclick=addCat;$('#cnew').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();addCat()}};
+$('#cclose').onclick=()=>$('#cdlg').close();
+$('#csave').onclick=async()=>{addCat();
+  const categories=[...document.querySelectorAll('#clist input')].map(i=>({name:i.value.trim(),old:i.dataset.old||null}));
+  await fetch('api/categories',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({categories})});
+  $('#cdlg').close();load()};
 const TYPES={1:'Docker local',2:'Agent Portainer',4:'Edge Agent'};
 function openEnvs(){
   const list=$('#elist');list.replaceChildren();

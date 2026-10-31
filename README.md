@@ -32,6 +32,15 @@ prioritaires sur la variable `HOSTS`, qui reste utilisable comme valeur par déf
 Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doit être public
 (GitHub → profil → *Packages* → `dockpage` → *Package settings* → *Change visibility*).
 
+## Catégories
+
+- Le bouton **Catégories** permet de créer, renommer et supprimer des catégories (par exemple Média, IA, Outils).
+- Un conteneur se range dans une catégorie avec **Personnaliser** → *Modifier* → menu « Catégorie », ou en glissant sa carte
+  sur une catégorie (même vide). Glisser une carte sur un groupe d'environnement la retire de sa catégorie.
+- Les conteneurs sans catégorie restent regroupés par environnement. Une étiquette indique l'environnement d'un conteneur rangé.
+- Supprimer une catégorie remet ses conteneurs dans leur environnement. Les groupes saisis avec une ancienne version
+  sont repris automatiquement comme catégories.
+
 ## Ordre d'affichage et icônes
 
 - **Personnaliser** active le mode édition : chaque carte peut être déplacée par glisser-déposer ou avec les flèches ◀ ▶,
