@@ -30,6 +30,7 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 - Thème clair ou sombre : suit le système par défaut, modifiable avec le bouton en haut à droite (choix mémorisé).
 - Messages d'erreur explicites (jeton refusé, Portainer injoignable, environnement hors ligne).
 - Le bouton **Actualiser** relit Portainer immédiatement (sinon, la lecture automatique a lieu toutes les `REFRESH_SECONDS` secondes, 30 par défaut).
+- Le bouton **🔧** de chaque carte ouvre directement ses réglages : modifier « Lien à ouvrir », puis **Enregistrer** pour changer l'adresse de redirection. Laisser le champ vide rétablit le lien détecté automatiquement.
 - Toute la personnalisation (catégories, environnements, ordre, icônes) est regroupée derrière le bouton **Personnaliser**.
 
 ## Environnements (serveur, NAS…)

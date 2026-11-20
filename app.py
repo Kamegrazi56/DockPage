@@ -404,6 +404,10 @@ main{max-width:1240px;margin:0 auto;padding:22px 24px 80px}
 .group.collapsed .grid{display:none}
 
 /* Cartes */
+.card-wrap{position:relative}
+.card-wrap .card{height:100%}
+.card-wrap .head{padding-right:50px}
+.card-settings{position:absolute;top:17px;right:17px}
 .card{position:relative;display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);color:inherit;text-decoration:none;transition:transform .15s,box-shadow .15s,border-color .15s}
 a.card:hover{transform:translateY(-3px);box-shadow:var(--shadow-hover);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .card.nolink{background:transparent;box-shadow:none;border-style:dashed}
@@ -642,7 +646,10 @@ function render(){
           if(from<0)return moveTo(dk,i);  // vient d'un autre groupe
           const k=keys.slice();k.splice(i,0,k.splice(from,1)[0]);save(k)};
       }
-      grid.append(card);
+      const wrap=el('div','card-wrap'),settings=el('button','btn icon-btn card-settings','🔧');
+      settings.type='button';settings.title='Modifier le lien';settings.setAttribute('aria-label','Modifier le lien de '+(o.name||c.name));
+      settings.onclick=()=>{openItem(c,o);$('#f_url').focus()};
+      wrap.append(card,settings);grid.append(wrap);
     });
     sec.append(grid);out.append(sec);
   });
