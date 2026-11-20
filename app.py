@@ -14,6 +14,7 @@ PORTAINER_URL = os.environ.get("PORTAINER_URL", "").rstrip("/")
 TOKEN = os.environ.get("PORTAINER_TOKEN", "")
 VERIFY_TLS = os.environ.get("VERIFY_TLS", "true").lower() == "true"
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "30"))
+UPDATE_INTERVAL = max(300, int(os.environ.get("UPDATE_CHECK_SECONDS", "3600")))
 PORT = int(os.environ.get("PORT", "8080"))
 TITLE = os.environ.get("TITLE", "Homelab")
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/data/config.json")
@@ -27,13 +28,90 @@ GENERIC_OWNERS = {"library", "linuxserver", "lscr.io", "ghcr.io", "docker.io", "
 
 lock = threading.Lock()
 cache = {"environments": [], "updated": None, "error": None}
+versions = {}
+update_attempts = {}
 
 
-def api(path):
-    req = urllib.request.Request(PORTAINER_URL + "/api" + path, headers={"X-API-Key": TOKEN})
+def api(path, data=None):
+    req = urllib.request.Request(PORTAINER_URL + "/api" + path,
+                                 data=json.dumps(data).encode() if data is not None else None,
+                                 headers={"X-API-Key": TOKEN, "Content-Type": "application/json"})
     ctx = None if VERIFY_TLS else ssl._create_unverified_context()
-    with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+    with urllib.request.urlopen(req, timeout=300 if data is not None else 15, context=ctx) as r:
         return json.load(r)
+
+
+def image_version(endpoint, c):
+    """Compare l'image réellement utilisée au digest du tag distant, sans téléchargement."""
+    image = c.get("Image", "")
+    if "@" in image or image.startswith("sha256:") or not image:
+        return {"state": "pinned", "detail": "Image figée par digest ou sans tag vérifiable."}
+    key = (endpoint, c.get("ImageID"), image)
+    now = time.time()
+    if key in versions and now - versions[key][0] < UPDATE_INTERVAL:
+        return dict(versions[key][1])
+    try:
+        base = "/endpoints/%s/docker" % endpoint
+        local = api(base + "/images/%s/json" % urllib.parse.quote(c["ImageID"], safe=""))
+        digests = {d.rsplit("@", 1)[-1] for d in local.get("RepoDigests") or []}
+        if not digests:
+            raise ValueError("Image locale sans digest de registre.")
+        remote = api(base + "/distribution/%s/json" % urllib.parse.quote(image, safe=""))
+        digest = remote.get("Descriptor", {}).get("digest")
+        if not digest:
+            raise ValueError("Le registre ne fournit pas de digest.")
+        result = {"state": "current" if digest in digests else "available",
+                  "detail": "Comparaison avec le tag configuré : " + image}
+    except Exception as e:
+        result = {"state": "unknown", "detail": "Vérification impossible : " + str(e)}
+    result["checked"] = time.strftime("%d/%m %H:%M")
+    versions[key] = (now, result)
+    return dict(result)
+
+
+def auto_update_reason(c):
+    image = c.get("Image", "").lower()
+    labels = c.get("Labels") or {}
+    if "@" in image or image.startswith("sha256:") or not image:
+        return "Image figée : modifier sa référence dans Portainer."
+    if "com.docker.swarm.service.id" in labels:
+        return "Service Swarm : mettre à jour la stack dans Portainer."
+    if "portainer" in image or "dockpage" in image or (
+            os.environ.get("HOSTNAME") and c.get("Id", "").startswith(os.environ["HOSTNAME"])):
+        return "Mettre à jour DockPage et Portainer depuis un outil externe."
+    if c.get("State") != "running":
+        return "Mise à jour automatique réservée aux conteneurs en marche."
+    return ""
+
+
+def maybe_update(endpoint, key, c, version):
+    """Une tentative par intervalle ; jamais de recréation sur un statut incertain."""
+    reason = auto_update_reason(c)
+    version["autoBlocked"] = reason
+    if reason or load_items().get(key, {}).get("autoUpdate") is not True:
+        return
+    attempt = update_attempts.get(key)
+    if attempt and time.time() - attempt[0] < UPDATE_INTERVAL:
+        if attempt[1]:
+            version.update(state="error", detail=attempt[1])
+        return
+    if version["state"] != "available":
+        return
+    update_attempts[key] = (time.time(), "")
+    try:
+        base = "/endpoints/%s/docker/containers/%s/json" % (endpoint, c["Id"])
+        inspected = api(base)
+        if not inspected.get("State", {}).get("Running"):
+            raise ValueError("Le conteneur n'est plus en marche.")
+        if inspected.get("HostConfig", {}).get("NetworkMode", "").startswith("container:"):
+            raise ValueError("Réseau partagé avec un autre conteneur : utiliser Portainer.")
+        api("/docker/%s/containers/%s/recreate" % (endpoint, c["Id"]), {"PullImage": True})
+        versions.pop((endpoint, c.get("ImageID"), c.get("Image", "")), None)
+        version.update(state="updated", detail="Recréé par Portainer ; vérification au prochain rafraîchissement.")
+    except Exception as e:
+        message = "Échec de mise à jour : %s. Vérifier le conteneur dans Portainer." % e
+        update_attempts[key] = (time.time(), message)
+        version.update(state="error", detail=message)
 
 
 def load_config():
@@ -130,6 +208,9 @@ def collect():
             try:
                 for c in api("/endpoints/%s/docker/containers/json?all=1" % ep["Id"]):
                     name = (c.get("Names") or ["/?"])[0].lstrip("/")
+                    key = "%s/%s" % (ep["Name"], name)
+                    version = image_version(ep["Id"], c)
+                    maybe_update(ep["Id"], key, c, version)
                     ports, seen = [], set()
                     for p in c.get("Ports") or []:
                         pub = p.get("PublicPort")
@@ -139,7 +220,7 @@ def collect():
                         https = pub in HTTPS_PORTS or p.get("PrivatePort") in HTTPS_PORTS
                         ports.append({"port": pub, "url": "%s://%s:%s" % ("https" if https else "http", host, pub)})
                     entry["containers"].append({
-                        "key": "%s/%s" % (ep["Name"], name), "name": name, "image": c.get("Image", ""),
+                        "key": key, "name": name, "image": c.get("Image", ""), "version": version,
                         "state": c.get("State", ""), "status": c.get("Status", ""), "ports": ports,
                         "icons": icon_candidates(c.get("Image", ""), name),
                     })
@@ -267,6 +348,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, "{}")
         if self.path not in ("/api/item", "/api/envs", "/api/order", "/api/categories", "/api/move"):
             return self.send(404, "{}")
+        if self.headers.get_content_type() != "application/json":
+            return self.send(415, json.dumps({"error": "Content-Type application/json requis"}))
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
             cfg = load_config()
@@ -294,8 +377,10 @@ class Handler(BaseHTTPRequestHandler):
                 key, data = body["key"], body.get("data")
                 items = cfg.setdefault("items", {})
                 if data:
+                    if "autoUpdate" in data and type(data["autoUpdate"]) is not bool:
+                        raise ValueError("autoUpdate doit être un booléen")
                     items[key] = {k: v for k, v in data.items()
-                                  if k in ("name", "url", "group", "icon", "hidden") and v not in ("", None, False)}
+                                  if k in ("name", "url", "group", "icon", "hidden", "autoUpdate") and v not in ("", None, False)}
                 else:
                     items.pop(key, None)
             else:
@@ -496,6 +581,10 @@ dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
   <label>Catégorie<select id="f_group"></select></label>
   <label>Icône<small>Vide = automatique. Sinon : un nom de la collection (ex. jellyfin), une URL d'image ou un emoji.</small><input type="text" id="f_icon" placeholder="jellyfin, https://…/logo.png ou 🎬"></label>
   <label class="chk"><input type="checkbox" id="f_hidden">Masquer ce conteneur</label>
+  <label class="chk"><input type="checkbox" id="f_autoUpdate">Mise à jour automatique</label>
+  <p class="lead" id="updateHelp"></p>
+  <p class="lead">Le tag actuel est conservé. Une nouvelle image entraîne la recréation du conteneur et une interruption du service. Les données doivent être stockées dans des volumes.</p>
+  <p id="itemError" role="alert"></p>
   <div class="row"><button type="button" class="btn danger" id="reset">Réinitialiser</button><button type="button" class="btn" id="cancel">Annuler</button><button class="btn primary" id="save" value="ok">Enregistrer</button></div>
 </form></dialog>
 
@@ -625,6 +714,10 @@ function render(){
       head.append(tile,body);
       let since=fr(c.status);if(c.state==='running')since=since.replace(/^En marche /,'');
       const foot=el('div','foot');foot.append(el('span','pill '+st.cls,st.txt),el('span','since',since));
+      const v=c.version||{},vs={current:['ok','Image à jour'],available:['warn','Mise à jour disponible'],unknown:['','Vérification impossible'],pinned:['','Image figée'],updated:['ok','Mise à jour effectuée'],error:['bad','Échec de mise à jour']};
+      const [vc,vt]=vs[v.state]||['','Vérification en attente'];
+      const badge=el('span','pill '+vc,vt);badge.title=(v.detail||'')+(v.checked?' — Vérifié le '+v.checked:'');foot.append(badge);
+      if(o.autoUpdate){const a=el('span','tag',v.autoBlocked?'Auto en pause':'Màj auto');a.title=v.autoBlocked||'Mise à jour automatique activée';foot.append(a)}
       if(o.group)foot.append(el('span','tag',env.label||env.name));  // d'où vient un conteneur rangé dans une catégorie
       card.append(head,foot);
       if(c.ports.length>1){const p=el('div','ports');for(const x of c.ports){const a=el('a',null,'Port '+x.port);a.href=x.url;a.target='_blank';a.rel='noopener';a.onclick=e=>e.stopPropagation();p.append(a)}card.append(p)}
@@ -673,9 +766,13 @@ function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   for(const k of D.categories||[])sel.append(new Option(k,k));
   for(const k of ['name','url','group','icon'])$('#f_'+k).value=o[k]||'';
   $('#f_name').placeholder=c.name;
+  $('#f_autoUpdate').checked=!!o.autoUpdate;
+  $('#f_autoUpdate').disabled=!!(c.version||{}).autoBlocked&&!o.autoUpdate;
+  $('#updateHelp').textContent=(c.version||{}).autoBlocked||'Vérification périodique du registre, sans changer de tag.';
+  $('#itemError').textContent='';
   $('#f_hidden').checked=!!o.hidden;$('#dlg').showModal()}
-async function post(data){await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});$('#dlg').close();load()}
-$('#save').onclick=e=>{e.preventDefault();const d={hidden:$('#f_hidden').checked};for(const k of ['name','url','group','icon'])d[k]=$('#f_'+k).value.trim();post(d)};
+async function post(data){try{const r=await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});if(!r.ok)throw Error((await r.json()).error||'Enregistrement impossible');$('#dlg').close();load()}catch(e){$('#itemError').textContent=e.message}}
+$('#save').onclick=e=>{e.preventDefault();const d={hidden:$('#f_hidden').checked,autoUpdate:$('#f_autoUpdate').checked};for(const k of ['name','url','group','icon'])d[k]=$('#f_'+k).value.trim();post(d)};
 $('#reset').onclick=()=>post(null);$('#cancel').onclick=()=>$('#dlg').close();
 
 /* Fenêtre « Catégories » */

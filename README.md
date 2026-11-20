@@ -20,6 +20,7 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 | `VERIFY_TLS` | `false` pour un certificat auto-signé |
 | `TITLE` | Titre de la page |
 | `REFRESH_SECONDS` | Intervalle de rafraîchissement (30 par défaut) |
+| `UPDATE_CHECK_SECONDS` | Intervalle de vérification des images (3600 par défaut, minimum 300 secondes) |
 
 3. Ouvrir `http://IP_DU_SERVEUR:8088`.
 
@@ -66,3 +67,35 @@ Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doi
 Le tableau de bord n'a pas d'authentification : à garder sur le réseau local, sans l'exposer sur Internet.
 Le jeton Portainer donne un large accès : le stocker uniquement dans les variables de la stack.
 Les réglages de personnalisation sont enregistrés dans `/data/config.json`.
+
+## Versions des images et mises à jour automatiques
+
+Chaque tuile affiche **Image à jour**, **Mise à jour disponible**, **Image figée** ou
+**Vérification impossible**. Survoler l'indicateur donne le détail et la date de vérification.
+DockPage compare le digest de l'image utilisée par le conteneur avec celui du **tag configuré**
+dans le registre : `nginx:1.26` reste sur `1.26`, sans rechercher une nouvelle version majeure.
+Les vérifications sont mises en cache pendant `UPDATE_CHECK_SECONDS`, même avec **Actualiser**.
+Les images locales sans digest et les registres privés non accessibles restent en état inconnu ;
+aucune mise à jour n'est déclenchée dans ce cas.
+
+Dans **🔧 → Mise à jour automatique → Enregistrer**, activer le réglage pour chaque conteneur souhaité.
+Il est désactivé par défaut et conservé dans `/data/config.json` avec la personnalisation de la carte.
+Au prochain cycle, si une nouvelle image est détectée, DockPage demande à Portainer de télécharger
+l'image et de recréer le conteneur avec ses paramètres existants. Le service est interrompu pendant
+l'opération ; conserver les données dans des volumes, car la couche inscriptible du conteneur est remplacée.
+Le nom de la carte et ses réglages restent associés au nom du conteneur, même si son identifiant change.
+Après une erreur, la tuile l'indique et aucune nouvelle tentative n'a lieu pendant l'intervalle de vérification
+(ce délai de tentative est conservé en mémoire jusqu'au redémarrage de DockPage).
+
+Les conteneurs arrêtés, images figées par digest, services Swarm, DockPage et Portainer/agents
+ne sont pas recréés automatiquement. Un réseau `container:…` empêche aussi la recréation.
+Pour ces cas, utiliser Portainer ou l'outil de déploiement. Pour une stack Compose, l'opération est
+individuelle : elle ne modifie pas le fichier Compose et ne coordonne pas les services dépendants.
+La fonctionnalité nécessite que la version de Portainer expose son action de recréation et que
+le jeton dispose des droits correspondants ; sinon la tuile affiche l'échec.
+
+Références techniques : [proxy Docker de Portainer](https://docs.portainer.io/api/examples),
+[action de recréation Portainer](https://github.com/portainer/portainer/blob/develop/api/http/handler/docker/containers/recreate.go),
+[lecture du digest distant Docker](https://docs.docker.com/reference/api/engine/version/v1.57/operations/DistributionInspect/).
+
+Tests locaux (sans accès à un Docker réel) : `python3 -m unittest -v test_app`.
