@@ -115,12 +115,20 @@ les certificats HTTPS sont vérifiés. Le jeton Portainer n'est jamais envoyé �
 
 Chaque carte affiche la latence, les 60 derniers contrôles et leur pourcentage de réussite
 (ce n'est pas une disponibilité calculée sur 24 heures). Survoler une barre affiche sa date et
-son résultat. Un résultat ancien repasse en attente. L'état du conteneur reste affiché séparément :
+son résultat. La date et le détail du dernier contrôle (réponse HTTP ou erreur), l'intervalle
+et l'heure prévue du prochain contrôle sont visibles directement sur la carte. Les cartes
+surveillées restent visibles même sans lien à ouvrir. Un résultat ancien repasse en attente.
+L'état du conteneur reste affiché séparément :
 un conteneur en marche peut héberger un service inaccessible. Le résumé signale aussi les échecs
 pour les services surveillés dont l'environnement Portainer est indisponible.
 
-`MONITOR_INTERVAL_SECONDS` règle la pause entre deux cycles (60 secondes par défaut, minimum 10).
-Le premier résultat arrive au prochain cycle ; le navigateur relit les résultats toutes les 30 secondes.
+Dans **🔧 → Intervalle de vérification (secondes)**, régler chaque service de 10 à 86400 secondes.
+Laisser le champ vide utilise `MONITOR_INTERVAL_SECONDS` (60 secondes par défaut, minimum 10).
+Chaque service est contrôlé indépendamment lorsque son intervalle depuis le dernier résultat
+est écoulé ; changer l'intervalle conserve l'historique. Le serveur recherche les contrôles dus
+chaque seconde, avec un délai possible lorsque les contrôles précédents sont encore en cours.
+Le premier contrôle est lancé dès le prochain passage ; le navigateur relit les résultats toutes
+les 5 secondes. **Actualiser** relit Portainer, sans forcer un contrôle de disponibilité.
 Les réglages sont persistants, mais l'historique est conservé en mémoire et repart à zéro après
 un redémarrage ou un changement de cible. Cette première version ne comprend ni notifications,
 ni stockage longue durée, ni intégration avec une instance Uptime Kuma.
@@ -140,8 +148,8 @@ Le Gestionnaire Docker effectue le déploiement avec
 Les variables `PORTAINER_URL`, `PORTAINER_TOKEN`, `VERIFY_TLS` et `HOSTS` peuvent être fournies
 par l'environnement ou un fichier `.env` local ignoré par Git. Aucun jeton n'est inclus.
 Sans accès Portainer configuré, le serveur et son API peuvent être testés, mais la liste
-des conteneurs ne sera pas disponible. Les contrôles de disponibilité tournent toutes les
-10 secondes dans cette configuration de test.
+des conteneurs ne sera pas disponible. L'intervalle par défaut des contrôles de disponibilité
+est de 10 secondes dans cette configuration de test.
 
 Pour arrêter la stack en conservant ses réglages, le Gestionnaire Docker utilise
 `docker compose -f compose.test.yml down` (sans suppression du volume).

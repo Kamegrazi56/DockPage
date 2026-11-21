@@ -121,6 +121,9 @@ def maybe_update(endpoint, key, c, version):
 
 
 def validate_monitor(data):
+    interval = data.get("monitorInterval")
+    if interval is not None and (type(interval) is not int or not 10 <= interval <= 86400):
+        raise ValueError("Intervalle de surveillance : entier entre 10 et 86400 secondes")
     mode = data.get("monitor", "")
     if mode not in ("", "http", "tcp"):
         raise ValueError("Surveillance : choisir HTTP, TCP ou désactivée")
@@ -188,6 +191,11 @@ def monitor_targets():
 
 def check_monitors():
     targets = monitor_targets()
+    items = load_items()
+    with lock:
+        targets = {key: pair for key, pair in targets.items()
+                   if (monitors.get(key, {}).get("mode"), monitors.get(key, {}).get("target")) != pair
+                   or time.time() >= monitors[key]["checked"] + items.get(key, {}).get("monitorInterval", MONITOR_INTERVAL)}
     with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(lambda pair: probe_service(*pair), targets.values()))
     current = monitor_targets()
@@ -212,7 +220,7 @@ def monitor_loop():
             check_monitors()
         except Exception as error:
             print("Surveillance : %s" % error, flush=True)
-        time.sleep(MONITOR_INTERVAL)
+        time.sleep(1)
 
 
 def load_config():
@@ -483,7 +491,7 @@ class Handler(BaseHTTPRequestHandler):
                     if "autoUpdate" in data and type(data["autoUpdate"]) is not bool:
                         raise ValueError("autoUpdate doit être un booléen")
                     items[key] = {k: v for k, v in data.items()
-                                  if k in ("name", "url", "group", "icon", "hidden", "autoUpdate", "monitor", "monitorUrl") and v not in ("", None, False)}
+                                  if k in ("name", "url", "group", "icon", "hidden", "autoUpdate", "monitor", "monitorUrl", "monitorInterval") and v not in ("", None, False)}
                 else:
                     items.pop(key, None)
             else:
@@ -634,7 +642,7 @@ a.card:hover{transform:translateY(-3px);box-shadow:var(--shadow-hover);border-co
 @keyframes sh{to{background-position:-200% 0}}
 
 /* Fenêtres */
-.monitor{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 14px}.heartbeats{display:flex;gap:3px;width:100%;height:18px}.heartbeats span{flex:1;max-width:10px;border-radius:3px}.heartbeats .up{background:var(--ok,#22a06b)}.heartbeats .down{background:var(--bad,#d54848)}
+.monitor{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 14px}.monitor .since{width:100%;overflow-wrap:anywhere;font-size:.82rem;color:var(--muted)}.heartbeats{display:flex;gap:3px;width:100%;height:18px}.heartbeats span{flex:1;max-width:10px;border-radius:3px}.heartbeats .up{background:var(--ok,#22a06b)}.heartbeats .down{background:var(--bad,#d54848)}
 dialog{border:1px solid var(--line);border-radius:22px;background:var(--surface);color:var(--text);width:min(480px,94vw);padding:0;box-shadow:0 30px 80px -20px rgba(0,0,0,.45);max-height:90vh}
 dialog::backdrop{background:rgba(20,15,10,.45);backdrop-filter:blur(3px)}
 dialog form{padding:22px 24px;display:flex;flex-direction:column;gap:4px}
@@ -691,6 +699,7 @@ dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
   <label class="chk"><input type="checkbox" id="f_hidden">Masquer ce conteneur</label>
   <label>Surveillance du service<select id="f_monitor"><option value="">Désactivée</option><option value="http">HTTP / HTTPS</option><option value="tcp">Connexion TCP</option></select></label>
   <label>Adresse à surveiller<small>Vide = lien de la carte ou premier port détecté. HTTP : réponse 200–399 ; TCP : connexion au port.</small><input type="text" id="f_monitorUrl" placeholder="https://service/health ou tcp://192.168.1.210:5432"></label>
+  <label>Intervalle de vérification (secondes)<small>De 10 à 86400 secondes. Vide = valeur par défaut du serveur. Appliqué après le dernier contrôle.</small><input type="number" id="f_monitorInterval" min="10" max="86400" step="1"></label>
   <label class="chk"><input type="checkbox" id="f_autoUpdate">Mise à jour automatique</label>
   <p class="lead" id="updateHelp"></p>
   <p class="lead">Le tag actuel est conservé. Une nouvelle image entraîne la recréation du conteneur et une interruption du service. Les données doivent être stockées dans des volumes.</p>
@@ -763,7 +772,7 @@ function render(){
       const o=D.items[c.key]||{},url=o.url||(c.ports[0]&&c.ports[0].url)||'',st=stateInfo(c);
       if(!o.hidden){if(st.cls==='ok')nOk++;else if(st.cls==='bad')nStop++;else if(st.cls==='warn')nWarn++}
       if(o.hidden&&!edit)continue;
-      if(!url&&!showAll&&!edit)continue;
+      if(!url&&!o.monitor&&!showAll&&!edit)continue;
       if(!edit&&q&&!(c.name+' '+c.image+' '+(o.name||'')).toLowerCase().includes(q))continue;
       const g=o.group||env.label||env.name;(groups[g]=groups[g]||[]).push({c,o,url,env,st});
     }
@@ -772,7 +781,7 @@ function render(){
   const sm=$('#summary');sm.replaceChildren();
   if(D.environments.length){
     const monitored=Object.entries(D.items).filter(([key,o])=>o.monitor&&!o.hidden);
-    const recent=monitored.filter(([key,o])=>{const m=(D.monitors||{})[key];return m&&m.mode===o.monitor&&(!o.monitorUrl||m.target===o.monitorUrl)&&Date.now()/1000-m.checked<Math.max(180,D.monitorInterval*3)});
+    const recent=monitored.filter(([key,o])=>{const m=(D.monitors||{})[key];return m&&m.mode===o.monitor&&(!o.monitorUrl||m.target===o.monitorUrl)&&Date.now()/1000-m.checked<Math.max(30,(o.monitorInterval||D.monitorInterval)*3)});
     const unavailable=recent.filter(([key])=>D.monitors[key].state==='down').length,pending=monitored.length-recent.length;
     if(unavailable||pending)nWarn+=unavailable+pending;
     const all=nOk+nStop+nWarn;
@@ -836,10 +845,17 @@ function render(){
       if(o.group)foot.append(el('span','tag',env.label||env.name));  // d'où vient un conteneur rangé dans une catégorie
       card.append(head,foot);
       if(o.monitor){
-        const m=(D.monitors||{})[c.key],fresh=m&&m.mode===o.monitor&&(!o.monitorUrl||m.target===o.monitorUrl)&&Date.now()/1000-m.checked<Math.max(180,D.monitorInterval*3);
+        const m=(D.monitors||{})[c.key],fresh=m&&m.mode===o.monitor&&(!o.monitorUrl||m.target===o.monitorUrl)&&Date.now()/1000-m.checked<Math.max(30,(o.monitorInterval||D.monitorInterval)*3);
         const status=el('span','pill '+(fresh?(m.state==='up'?'ok':'bad'):''),fresh?(m.state==='up'?'En ligne':'Hors ligne'):'Contrôle en attente');
         status.title=fresh?m.detail+' — '+new Date(m.checked*1000).toLocaleString(): 'En attente d’un contrôle récent';
-        const box=el('div','monitor');box.append(status);
+        const box=el('div','monitor'),interval=o.monitorInterval||D.monitorInterval;box.append(status);
+        box.append(el('span','since',o.monitor.toUpperCase()+' · Toutes les '+interval+' s'));
+        if(m){
+          box.append(el('span','since','Dernier contrôle : '+new Date(m.checked*1000).toLocaleString()+' · '+m.detail));
+          const next=m.checked+interval;
+          box.append(el('span','since',next>Date.now()/1000?'Prochain contrôle prévu : '+new Date(next*1000).toLocaleTimeString():'Prochain contrôle attendu · résultat en attente'));
+        }else box.append(el('span','since','Premier contrôle en attente'));
+        if(m)box.title=m.target;
         if(fresh){
           box.append(el('span','since',(m.ms===null?'':m.ms+' ms · ')+m.uptime+' % sur '+m.history.length+' contrôles'));
           const bars=el('div','heartbeats');bars.setAttribute('aria-label','Historique des contrôles, du plus ancien au plus récent');
@@ -893,6 +909,8 @@ function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   const sel=$('#f_group');sel.replaceChildren(new Option('Aucune (selon l\'environnement)',''));
   for(const k of D.categories||[])sel.append(new Option(k,k));
   for(const k of ['name','url','group','icon','monitor','monitorUrl'])$('#f_'+k).value=o[k]||'';
+  $('#f_monitorInterval').value=o.monitorInterval||'';
+  $('#f_monitorInterval').placeholder=D.monitorInterval+' (défaut)';
   $('#f_name').placeholder=c.name;
   $('#f_autoUpdate').checked=!!o.autoUpdate;
   $('#f_autoUpdate').disabled=!!(c.version||{}).autoBlocked&&!o.autoUpdate;
@@ -900,7 +918,7 @@ function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   $('#itemError').textContent='';
   $('#f_hidden').checked=!!o.hidden;$('#dlg').showModal()}
 async function post(data){try{const r=await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});if(!r.ok)throw Error((await r.json()).error||'Enregistrement impossible');$('#dlg').close();load()}catch(e){$('#itemError').textContent=e.message}}
-$('#save').onclick=e=>{e.preventDefault();const d={hidden:$('#f_hidden').checked,autoUpdate:$('#f_autoUpdate').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
+$('#save').onclick=e=>{e.preventDefault();if(!$('#f_monitorInterval').reportValidity())return;const d={monitorInterval:$('#f_monitorInterval').value?Number($('#f_monitorInterval').value):null,hidden:$('#f_hidden').checked,autoUpdate:$('#f_autoUpdate').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
 $('#reset').onclick=()=>post(null);$('#cancel').onclick=()=>$('#dlg').close();
 
 /* Fenêtre « Catégories » */
@@ -956,7 +974,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='/'&&!/input|select|textarea/i.test(document.activeElement.tagName)){e.preventDefault();$('#q').focus()}
   else if(e.key==='Escape'&&document.activeElement===$('#q')){$('#q').value='';render();$('#q').blur()}});
 hello();setInterval(hello,30000);
-load();setInterval(load,30000);
+load();setInterval(load,5000);
 </script></body></html>"""
 
 if __name__ == "__main__":
