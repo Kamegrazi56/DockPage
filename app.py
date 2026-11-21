@@ -75,6 +75,21 @@ def image_version(endpoint, c):
     return dict(result)
 
 
+def deployed_version(c):
+    """Version déclarée, sinon référence identifiable sans consulter le registre."""
+    labels = c.get("Labels") or {}
+    declared = labels.get("org.opencontainers.image.version") or labels.get("org.label-schema.version")
+    if declared:
+        return declared
+    image = c.get("Image") or ""
+    image_id = c.get("ImageID") or (image.split("@", 1)[-1] if "@" in image or image.startswith("sha256:") else "")
+    identity = image_id[:19] if image_id.startswith("sha256:") else image_id
+    tag = image.rsplit("/", 1)[-1].rsplit(":", 1)[-1] if ":" in image.rsplit("/", 1)[-1] else "latest"
+    if "@" in image or image.startswith("sha256:") or not image:
+        return identity or "Indisponible"
+    return " · ".join(part for part in ("Tag " + tag, identity) if part)
+
+
 def auto_update_reason(c):
     image = c.get("Image", "").lower()
     labels = c.get("Labels") or {}
@@ -231,12 +246,39 @@ def load_config():
         return {}
 
 
-def save_config(cfg):
-    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-    tmp = CONFIG_PATH + ".tmp"
+def save_config(cfg, path=None):
+    path = path or CONFIG_PATH
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, CONFIG_PATH)
+    os.replace(tmp, path)
+
+
+def record_image_changes(envs):
+    """Conserve l'heure d'observation, jamais une date de mise à jour supposée."""
+    path = CONFIG_PATH + ".images.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            history = json.load(f)
+    except FileNotFoundError:
+        history = {}
+    changed = False
+    for env in envs:
+        for c in env["containers"]:
+            c["imageChangedAt"] = None
+            image_id = c.get("imageId")
+            if not image_id:
+                continue
+            key = "%s/%s" % (env["id"], c["name"])
+            previous = history.get(key)
+            if not previous or previous["imageId"] != image_id:
+                history[key] = {"imageId": image_id,
+                                "observedAt": time.time() if previous else None}
+                changed = True
+            c["imageChangedAt"] = history[key]["observedAt"]
+    if changed:
+        save_config(history, path)
 
 
 def load_items():
@@ -310,7 +352,7 @@ def collect():
         if ep.get("Type") not in (1, 2, 4):  # Docker, agent Docker, Edge agent Docker
             continue
         host, source = env_host(ep, saved)
-        entry = {"name": ep["Name"], "label": saved.get(ep["Name"], {}).get("label", ""),
+        entry = {"id": ep["Id"], "name": ep["Name"], "label": saved.get(ep["Name"], {}).get("label", ""),
                  "type": ep.get("Type"), "url": ep.get("URL", ""), "host": host, "hostSource": source,
                  "online": ep.get("Status") == 1, "containers": []}
         if entry["online"]:
@@ -330,12 +372,15 @@ def collect():
                         ports.append({"port": pub, "url": "%s://%s:%s" % ("https" if https else "http", host, pub)})
                     entry["containers"].append({
                         "key": key, "name": name, "image": c.get("Image", ""), "version": version,
+                        "deployedVersion": deployed_version(c), "deployedAt": c.get("Created"),
+                        "imageId": c.get("ImageID"),
                         "state": c.get("State", ""), "status": c.get("Status", ""), "ports": ports,
                         "icons": icon_candidates(c.get("Image", ""), name),
                     })
             except Exception as e:  # un environnement en erreur n'empêche pas les autres
                 entry["error"] = str(e)
         envs.append(entry)
+    record_image_changes(envs)
     return envs
 
 
@@ -618,6 +663,7 @@ a.card:hover{transform:translateY(-3px);box-shadow:var(--shadow-hover);border-co
 .body{min-width:0;flex:1}
 .name{font-weight:700;font-size:1.04rem;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sub{color:var(--muted);font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub.metadata{white-space:normal;overflow-wrap:anywhere;margin-top:3px}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;font-size:.76rem;font-weight:700;white-space:nowrap;background:var(--mute-bg);color:var(--muted)}
 .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
 .pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.bad{background:var(--bad-bg);color:var(--bad)}.pill.warn{background:var(--warn-bg);color:var(--warn)}
@@ -835,6 +881,15 @@ function render(){
       const head=el('div','head'),tile=el('div','tile'),body=el('div','body');
       fillIcon(tile,c,o);
       body.append(el('div','name',o.name||c.name),el('div','sub',c.image));
+      const release=el('div','sub metadata','Version : '+(c.deployedVersion||'Indisponible'));
+      release.title=release.textContent;
+      const formatDate=value=>typeof value==='number'&&value>0&&Number.isFinite(new Date(value*1000).getTime())
+        ?new Date(value*1000).toLocaleString('fr-FR'):'Indisponible';
+      const updated=el('div','sub metadata','Dernière mise à jour observée : '+formatDate(c.imageChangedAt));
+      updated.title='Heure à laquelle DockPage a constaté un changement d’image, dans votre fuseau horaire. La date exacte de l’opération est inconnue. Indisponible avant le premier changement observé.';
+      const deployed=el('div','sub metadata','Dernier déploiement : '+formatDate(c.deployedAt));
+      deployed.title='Création du conteneur actuel. Une recréation avec la même image change cette date, un simple redémarrage ne la change pas.';
+      body.append(release,updated,deployed);
       head.append(tile,body);
       let since=fr(c.status);if(c.state==='running')since=since.replace(/^En marche /,'');
       const foot=el('div','foot');foot.append(el('span','pill '+st.cls,st.txt),el('span','since',since));

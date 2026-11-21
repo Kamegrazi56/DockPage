@@ -70,6 +70,22 @@ Les réglages de personnalisation sont enregistrés dans `/data/config.json`.
 
 ## Versions des images et mises à jour automatiques
 
+Chaque tuile indique la **Version** déclarée par le label `org.opencontainers.image.version`
+(ou `org.label-schema.version`). À défaut, elle affiche le tag et l'identifiant abrégé de
+l'image utilisée : un tag comme `latest` n'est pas un numéro de version.
+La **Dernière mise à jour observée** indique quand DockPage a constaté un changement
+d'identifiant d'image, y compris un retour à une ancienne image. La date exacte de l'opération
+reste inconnue : un changement survenu pendant un arrêt sera daté à sa découverte.
+La première découverte affiche « Indisponible », sans inventer d'historique.
+Une recréation avec la même image ou un simple redémarrage ne change pas cette information.
+Les observations sont conservées à côté de la configuration dans `config.json.images.json`
+(`CONFIG_PATH` suivi de `.images.json`), dans le volume persistant. Elles sont associées
+à l'identifiant d'environnement et au nom du conteneur ; un renommage crée un nouveau suivi.
+Une erreur de lecture ou d'écriture de ce fichier est signalée sans publier une nouvelle
+observation non sauvegardée. Ne pas partager ce fichier entre plusieurs instances DockPage.
+Le **Dernier déploiement**, affiché séparément, correspond à la création du conteneur actuel :
+une recréation, même avec la même image, le change. Les dates utilisent le fuseau du navigateur.
+
 Chaque tuile affiche **Image à jour**, **Mise à jour disponible**, **Image figée** ou
 **Vérification impossible**. Survoler l'indicateur donne le détail et la date de vérification.
 DockPage compare le digest de l'image utilisée par le conteneur avec celui du **tag configuré**
