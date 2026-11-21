@@ -99,3 +99,49 @@ Références techniques : [proxy Docker de Portainer](https://docs.portainer.io/
 [lecture du digest distant Docker](https://docs.docker.com/reference/api/engine/version/v1.57/operations/DistributionInspect/).
 
 Tests locaux (sans accès à un Docker réel) : `python3 -m unittest -v test_app`.
+
+## Surveillance de disponibilité
+
+Dans **🔧 → Surveillance du service**, choisir HTTP / HTTPS ou TCP, puis enregistrer.
+Le contrôle est désactivé par défaut. L'adresse peut être distincte du lien de la carte
+(par exemple `https://service/health` ou `tcp://192.168.1.210:5432`). Vide, elle reprend
+le lien de la carte, sinon le premier port détecté ; en TCP, son hôte et son port sont utilisés.
+
+DockPage effectue les contrôles depuis son serveur même lorsque le navigateur est fermé,
+avec au plus huit contrôles en parallèle. Une réponse HTTP finale 200–399 après redirection,
+ou une connexion TCP réussie, indique **En ligne**. Les erreurs HTTP (dont 401/403), réseau,
+certificat HTTPS et délais dépassés indiquent **Hors ligne**. Le délai réseau est de cinq secondes ;
+les certificats HTTPS sont vérifiés. Le jeton Portainer n'est jamais envoyé à ces services.
+
+Chaque carte affiche la latence, les 60 derniers contrôles et leur pourcentage de réussite
+(ce n'est pas une disponibilité calculée sur 24 heures). Survoler une barre affiche sa date et
+son résultat. Un résultat ancien repasse en attente. L'état du conteneur reste affiché séparément :
+un conteneur en marche peut héberger un service inaccessible. Le résumé signale aussi les échecs
+pour les services surveillés dont l'environnement Portainer est indisponible.
+
+`MONITOR_INTERVAL_SECONDS` règle la pause entre deux cycles (60 secondes par défaut, minimum 10).
+Le premier résultat arrive au prochain cycle ; le navigateur relit les résultats toutes les 30 secondes.
+Les réglages sont persistants, mais l'historique est conservé en mémoire et repart à zéro après
+un redémarrage ou un changement de cible. Cette première version ne comprend ni notifications,
+ni stockage longue durée, ni intégration avec une instance Uptime Kuma.
+
+Tests de disponibilité et de non-régression sans Docker :
+`python3 -m unittest -v test_app test_monitor`.
+
+### Déploiement de test du code local
+
+Le fichier autonome `compose.test.yml` construit le `Dockerfile` du dépôt pour le projet
+`dockpage-grazi19-test`. Il utilise son propre volume nommé `test-data` et expose l'application
+sur `http://127.0.0.1:18019` (port modifiable par `DOCKPAGE_TEST_PORT`). Il ne reprend ni le
+volume de production ni la stack existante `dockpage-test`.
+
+Le Gestionnaire Docker effectue le déploiement avec
+`docker compose -f compose.test.yml up -d --build` depuis le dépôt.
+Les variables `PORTAINER_URL`, `PORTAINER_TOKEN`, `VERIFY_TLS` et `HOSTS` peuvent être fournies
+par l'environnement ou un fichier `.env` local ignoré par Git. Aucun jeton n'est inclus.
+Sans accès Portainer configuré, le serveur et son API peuvent être testés, mais la liste
+des conteneurs ne sera pas disponible. Les contrôles de disponibilité tournent toutes les
+10 secondes dans cette configuration de test.
+
+Pour arrêter la stack en conservant ses réglages, le Gestionnaire Docker utilise
+`docker compose -f compose.test.yml down` (sans suppression du volume).

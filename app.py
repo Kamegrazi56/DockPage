@@ -4,10 +4,13 @@ import json
 import os
 import re
 import ssl
+import socket
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORTAINER_URL = os.environ.get("PORTAINER_URL", "").rstrip("/")
@@ -15,6 +18,8 @@ TOKEN = os.environ.get("PORTAINER_TOKEN", "")
 VERIFY_TLS = os.environ.get("VERIFY_TLS", "true").lower() == "true"
 REFRESH = int(os.environ.get("REFRESH_SECONDS", "30"))
 UPDATE_INTERVAL = max(300, int(os.environ.get("UPDATE_CHECK_SECONDS", "3600")))
+MONITOR_INTERVAL = max(10, int(os.environ.get("MONITOR_INTERVAL_SECONDS", "60")))
+MONITOR_TIMEOUT = 5
 PORT = int(os.environ.get("PORT", "8080"))
 TITLE = os.environ.get("TITLE", "Homelab")
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/data/config.json")
@@ -30,6 +35,7 @@ lock = threading.Lock()
 cache = {"environments": [], "updated": None, "error": None}
 versions = {}
 update_attempts = {}
+monitors = {}
 
 
 def api(path, data=None):
@@ -112,6 +118,101 @@ def maybe_update(endpoint, key, c, version):
         message = "Échec de mise à jour : %s. Vérifier le conteneur dans Portainer." % e
         update_attempts[key] = (time.time(), message)
         version.update(state="error", detail=message)
+
+
+def validate_monitor(data):
+    mode = data.get("monitor", "")
+    if mode not in ("", "http", "tcp"):
+        raise ValueError("Surveillance : choisir HTTP, TCP ou désactivée")
+    target = data.get("monitorUrl", "")
+    if not isinstance(target, str):
+        raise ValueError("Adresse de surveillance invalide")
+    if not target or not mode:
+        return
+    parsed = urllib.parse.urlsplit(target)
+    if (parsed.scheme not in (("tcp",) if mode == "tcp" else ("http", "https"))
+            or not parsed.hostname or parsed.username or parsed.password
+            or (mode == "tcp" and (not parsed.port or parsed.path or parsed.query or parsed.fragment))):
+        raise ValueError("Adresse attendue : http(s)://hôte:port ou tcp://hôte:port")
+    parsed.port  # vérifie aussi la plage et le format du port HTTP
+
+
+def probe_service(mode, target):
+    started = time.monotonic()
+    try:
+        validate_monitor({"monitor": mode, "monitorUrl": target})
+        if not target:
+            raise ValueError("Aucune adresse : renseigner une cible dans les réglages")
+        if mode == "tcp":
+            parsed = urllib.parse.urlsplit(target)
+            with socket.create_connection((parsed.hostname, parsed.port), timeout=MONITOR_TIMEOUT):
+                pass
+            detail = "Connexion TCP établie"
+        else:
+            # Ne transmet jamais le jeton Portainer aux services surveillés.
+            req = urllib.request.Request(target, headers={"User-Agent": "DockPage-monitor"})
+            with urllib.request.urlopen(req, timeout=MONITOR_TIMEOUT) as response:
+                detail = "HTTP %s" % response.status
+                if not 200 <= response.status < 400:
+                    raise ValueError(detail)
+        return {"state": "up", "detail": detail, "ms": round((time.monotonic() - started) * 1000)}
+    except Exception as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+        return {"state": "down", "detail": str(error), "ms": None}
+
+
+def monitor_targets():
+    items = load_items()
+    with lock:
+        containers = {c["key"]: c for env in cache["environments"] for c in env["containers"]}
+    targets = {}
+    for key, item in items.items():
+        mode = item.get("monitor")
+        if mode not in ("http", "tcp"):
+            continue
+        ports = containers.get(key, {}).get("ports", [])
+        target = item.get("monitorUrl") or item.get("url") or (ports[0]["url"] if ports else "")
+        if mode == "tcp" and not item.get("monitorUrl") and target:
+            try:
+                parsed = urllib.parse.urlsplit(target)
+                if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                    raise ValueError("Lien sans hôte HTTP")
+                target = "tcp://%s:%s" % (parsed.hostname if ":" not in parsed.hostname else "[" + parsed.hostname + "]",
+                                             parsed.port or (443 if parsed.scheme == "https" else 80))
+            except ValueError:
+                target = ""  # Une cible invalide ne bloque pas les autres services.
+        targets[key] = (mode, target)
+    return targets
+
+
+def check_monitors():
+    targets = monitor_targets()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda pair: probe_service(*pair), targets.values()))
+    current = monitor_targets()
+    with lock:
+        for key in list(monitors):
+            if key not in current:
+                del monitors[key]
+        for (key, (mode, target)), result in zip(targets.items(), results):
+            if current.get(key) != (mode, target):
+                continue
+            previous = monitors.get(key, {})
+            history = previous.get("history", []) if previous.get("target") == target and previous.get("mode") == mode else []
+            sample = dict(result, checked=time.time())
+            history = (history + [sample])[-60:]
+            monitors[key] = dict(sample, target=target, mode=mode, history=history,
+                                 uptime=round(100 * sum(h["state"] == "up" for h in history) / len(history), 1))
+
+
+def monitor_loop():
+    while True:
+        try:
+            check_monitors()
+        except Exception as error:
+            print("Surveillance : %s" % error, flush=True)
+        time.sleep(MONITOR_INTERVAL)
 
 
 def load_config():
@@ -319,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 payload = dict(cache, title=TITLE, items=cfg.get("items", {}), envs=cfg.get("envs", {}),
                                order=cfg.get("order", {}), groupOrder=cfg.get("groupOrder", []),
-                               categories=categories_of(cfg))
+                               categories=categories_of(cfg), monitors=dict(monitors), monitorInterval=MONITOR_INTERVAL)
             self.send(200, json.dumps(payload))
         elif self.path.split("?")[0] == "/icon":
             path = icon_file(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("n", []))
@@ -376,11 +477,13 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/item":
                 key, data = body["key"], body.get("data")
                 items = cfg.setdefault("items", {})
+                old_item = items.get(key, {})
                 if data:
+                    validate_monitor(data)
                     if "autoUpdate" in data and type(data["autoUpdate"]) is not bool:
                         raise ValueError("autoUpdate doit être un booléen")
                     items[key] = {k: v for k, v in data.items()
-                                  if k in ("name", "url", "group", "icon", "hidden", "autoUpdate") and v not in ("", None, False)}
+                                  if k in ("name", "url", "group", "icon", "hidden", "autoUpdate", "monitor", "monitorUrl") and v not in ("", None, False)}
                 else:
                     items.pop(key, None)
             else:
@@ -389,6 +492,10 @@ class Handler(BaseHTTPRequestHandler):
                         for n, e in body["envs"].items()}
                 cfg["envs"] = {n: e for n, e in envs.items() if e}
             save_config(cfg)
+            if self.path == "/api/item" and any(old_item.get(k) != items.get(key, {}).get(k)
+                                                for k in ("monitor", "monitorUrl", "url")):
+                with lock:
+                    monitors.pop(key, None)
             if self.path == "/api/envs":
                 refresh()  # les liens sont recalculés tout de suite
             self.send(200, "{}")
@@ -527,6 +634,7 @@ a.card:hover{transform:translateY(-3px);box-shadow:var(--shadow-hover);border-co
 @keyframes sh{to{background-position:-200% 0}}
 
 /* Fenêtres */
+.monitor{display:flex;flex-wrap:wrap;gap:8px;padding:0 16px 14px}.heartbeats{display:flex;gap:3px;width:100%;height:18px}.heartbeats span{flex:1;max-width:10px;border-radius:3px}.heartbeats .up{background:var(--ok,#22a06b)}.heartbeats .down{background:var(--bad,#d54848)}
 dialog{border:1px solid var(--line);border-radius:22px;background:var(--surface);color:var(--text);width:min(480px,94vw);padding:0;box-shadow:0 30px 80px -20px rgba(0,0,0,.45);max-height:90vh}
 dialog::backdrop{background:rgba(20,15,10,.45);backdrop-filter:blur(3px)}
 dialog form{padding:22px 24px;display:flex;flex-direction:column;gap:4px}
@@ -581,6 +689,8 @@ dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
   <label>Catégorie<select id="f_group"></select></label>
   <label>Icône<small>Vide = automatique. Sinon : un nom de la collection (ex. jellyfin), une URL d'image ou un emoji.</small><input type="text" id="f_icon" placeholder="jellyfin, https://…/logo.png ou 🎬"></label>
   <label class="chk"><input type="checkbox" id="f_hidden">Masquer ce conteneur</label>
+  <label>Surveillance du service<select id="f_monitor"><option value="">Désactivée</option><option value="http">HTTP / HTTPS</option><option value="tcp">Connexion TCP</option></select></label>
+  <label>Adresse à surveiller<small>Vide = lien de la carte ou premier port détecté. HTTP : réponse 200–399 ; TCP : connexion au port.</small><input type="text" id="f_monitorUrl" placeholder="https://service/health ou tcp://192.168.1.210:5432"></label>
   <label class="chk"><input type="checkbox" id="f_autoUpdate">Mise à jour automatique</label>
   <p class="lead" id="updateHelp"></p>
   <p class="lead">Le tag actuel est conservé. Une nouvelle image entraîne la recréation du conteneur et une interruption du service. Les données doivent être stockées dans des volumes.</p>
@@ -661,8 +771,13 @@ function render(){
   /* Résumé */
   const sm=$('#summary');sm.replaceChildren();
   if(D.environments.length){
+    const monitored=Object.entries(D.items).filter(([key,o])=>o.monitor&&!o.hidden);
+    const recent=monitored.filter(([key,o])=>{const m=(D.monitors||{})[key];return m&&m.mode===o.monitor&&(!o.monitorUrl||m.target===o.monitorUrl)&&Date.now()/1000-m.checked<Math.max(180,D.monitorInterval*3)});
+    const unavailable=recent.filter(([key])=>D.monitors[key].state==='down').length,pending=monitored.length-recent.length;
+    if(unavailable||pending)nWarn+=unavailable+pending;
     const all=nOk+nStop+nWarn;
     sm.append(el('span','chip '+(nStop||nWarn?'warn':'ok'),all?(nStop||nWarn?'Quelques services demandent un coup d\'œil':'✨ Tout fonctionne bien'):'Aucun conteneur détecté'));
+    if(monitored.length)sm.append(el('span','chip '+(unavailable?'bad':''),unavailable+' service(s) hors ligne / '+monitored.length+' surveillé(s)'+(pending?' · '+pending+' en attente':'')));
     if(nOk)sm.append(el('span','chip ok',nOk+' en marche'));
     if(nWarn)sm.append(el('span','chip warn',nWarn+' à surveiller'));
     if(nStop)sm.append(el('span','chip bad',nStop+' arrêté'+(nStop>1?'s':'')));
@@ -720,6 +835,19 @@ function render(){
       if(o.autoUpdate){const a=el('span','tag',v.autoBlocked?'Auto en pause':'Màj auto');a.title=v.autoBlocked||'Mise à jour automatique activée';foot.append(a)}
       if(o.group)foot.append(el('span','tag',env.label||env.name));  // d'où vient un conteneur rangé dans une catégorie
       card.append(head,foot);
+      if(o.monitor){
+        const m=(D.monitors||{})[c.key],fresh=m&&m.mode===o.monitor&&(!o.monitorUrl||m.target===o.monitorUrl)&&Date.now()/1000-m.checked<Math.max(180,D.monitorInterval*3);
+        const status=el('span','pill '+(fresh?(m.state==='up'?'ok':'bad'):''),fresh?(m.state==='up'?'En ligne':'Hors ligne'):'Contrôle en attente');
+        status.title=fresh?m.detail+' — '+new Date(m.checked*1000).toLocaleString(): 'En attente d’un contrôle récent';
+        const box=el('div','monitor');box.append(status);
+        if(fresh){
+          box.append(el('span','since',(m.ms===null?'':m.ms+' ms · ')+m.uptime+' % sur '+m.history.length+' contrôles'));
+          const bars=el('div','heartbeats');bars.setAttribute('aria-label','Historique des contrôles, du plus ancien au plus récent');
+          for(const h of m.history){const b=el('span',h.state==='up'?'up':'down');b.title=new Date(h.checked*1000).toLocaleString()+' — '+(h.state==='up'?'En ligne':'Hors ligne')+' — '+h.detail;bars.append(b)}
+          box.append(bars);
+        }
+        card.append(box);
+      }
       if(c.ports.length>1){const p=el('div','ports');for(const x of c.ports){const a=el('a',null,'Port '+x.port);a.href=x.url;a.target='_blank';a.rel='noopener';a.onclick=e=>e.stopPropagation();p.append(a)}card.append(p)}
       if(edit){
         card.onclick=e=>e.preventDefault();
@@ -764,7 +892,7 @@ async function post2(url,body){await fetch(url,{method:'POST',headers:{'Content-
 function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   const sel=$('#f_group');sel.replaceChildren(new Option('Aucune (selon l\'environnement)',''));
   for(const k of D.categories||[])sel.append(new Option(k,k));
-  for(const k of ['name','url','group','icon'])$('#f_'+k).value=o[k]||'';
+  for(const k of ['name','url','group','icon','monitor','monitorUrl'])$('#f_'+k).value=o[k]||'';
   $('#f_name').placeholder=c.name;
   $('#f_autoUpdate').checked=!!o.autoUpdate;
   $('#f_autoUpdate').disabled=!!(c.version||{}).autoBlocked&&!o.autoUpdate;
@@ -772,7 +900,7 @@ function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   $('#itemError').textContent='';
   $('#f_hidden').checked=!!o.hidden;$('#dlg').showModal()}
 async function post(data){try{const r=await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});if(!r.ok)throw Error((await r.json()).error||'Enregistrement impossible');$('#dlg').close();load()}catch(e){$('#itemError').textContent=e.message}}
-$('#save').onclick=e=>{e.preventDefault();const d={hidden:$('#f_hidden').checked,autoUpdate:$('#f_autoUpdate').checked};for(const k of ['name','url','group','icon'])d[k]=$('#f_'+k).value.trim();post(d)};
+$('#save').onclick=e=>{e.preventDefault();const d={hidden:$('#f_hidden').checked,autoUpdate:$('#f_autoUpdate').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
 $('#reset').onclick=()=>post(null);$('#cancel').onclick=()=>$('#dlg').close();
 
 /* Fenêtre « Catégories » */
@@ -833,5 +961,6 @@ load();setInterval(load,30000);
 
 if __name__ == "__main__":
     threading.Thread(target=refresher, daemon=True).start()
+    threading.Thread(target=monitor_loop, daemon=True).start()
     print("Tableau de bord sur le port %d" % PORT, flush=True)
     ThreadingHTTPServer(("", PORT), Handler).serve_forever()

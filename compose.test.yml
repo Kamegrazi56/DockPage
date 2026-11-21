@@ -1,0 +1,22 @@
+name: dockpage-grazi19-test
+
+services:
+  dockpage:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      TITLE: Homelab — test GRAZI-19
+      PORTAINER_URL: ${PORTAINER_URL:-}
+      PORTAINER_TOKEN: ${PORTAINER_TOKEN:-}
+      VERIFY_TLS: ${VERIFY_TLS:-true}
+      HOSTS: ${HOSTS:-}
+      MONITOR_INTERVAL_SECONDS: "10"
+    ports:
+      - "127.0.0.1:${DOCKPAGE_TEST_PORT:-18019}:8080"
+    volumes:
+      - test-data:/data
+    restart: "no"
+
+volumes:
+  test-data:
