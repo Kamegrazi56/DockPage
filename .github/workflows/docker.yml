@@ -1,3 +1,4 @@
+
 name: Publier l'image Docker
 
 on:
@@ -18,13 +19,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ghcr.io/kamegrazi56/dockpage:latest
+          tags: |
+            ghcr.io/kamegrazi56/dockpage:latest
+            ghcr.io/kamegrazi56/dockpage:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
