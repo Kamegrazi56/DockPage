@@ -26,12 +26,15 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 
 ## Interface
 
+- Présentation « Lanceur et détails » : fond clair chaleureux (ou thème sombre), icônes sans tuiles et panneau de détails. Cliquer sur une icône sélectionne le service ; **Ouvrir** dans le panneau ouvre son lien dans un nouvel onglet. Sur petit écran, les détails passent au-dessus de la liste. **✕** ou `Échap` ferme le panneau.
+- Filtres par groupe et par environnement, combinables avec la recherche. La sélection est conservée lors des rafraîchissements, et fermée si le service disparaît des résultats.
+- Les états du conteneur et du service restent séparés sous chaque icône. Versions, dates, ports, contrôles et mises à jour sont regroupés dans le panneau.
 - Accueil avec salutation, résumé de l'état des services (en marche, à surveiller, arrêtés) et statuts en français.
 - Sections repliables (l'état est mémorisé dans le navigateur) et recherche rapide (touche `/` pour y accéder, `Échap` pour l'effacer).
 - Thème clair ou sombre : suit le système par défaut, modifiable avec le bouton en haut à droite (choix mémorisé).
 - Messages d'erreur explicites (jeton refusé, Portainer injoignable, environnement hors ligne).
 - Le bouton **Actualiser** relit Portainer immédiatement (sinon, la lecture automatique a lieu toutes les `REFRESH_SECONDS` secondes, 30 par défaut).
-- Le bouton **🔧** de chaque carte ouvre directement ses réglages : modifier « Lien à ouvrir », puis **Enregistrer** pour changer l'adresse de redirection. Laisser le champ vide rétablit le lien détecté automatiquement.
+- Le bouton **Réglages** du panneau ouvre les réglages du service sélectionné : modifier « Lien à ouvrir », puis **Enregistrer** pour changer l'adresse de redirection. Laisser le champ vide rétablit le lien détecté automatiquement.
 - Toute la personnalisation (catégories, environnements, ordre, icônes) est regroupée derrière le bouton **Personnaliser**.
 
 ## Environnements (serveur, NAS…)
@@ -46,15 +49,15 @@ Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doi
 ## Catégories
 
 - Le bouton **Catégories** permet de créer, renommer et supprimer des catégories (par exemple Média, IA, Outils).
-- Un conteneur se range dans une catégorie avec **Personnaliser** → *Modifier* → menu « Catégorie », ou en glissant sa carte
-  sur une catégorie (même vide). Glisser une carte sur un groupe d'environnement la retire de sa catégorie.
+- Un conteneur se range dans une catégorie avec **Personnaliser** → *Modifier* → menu « Catégorie », ou en glissant son icône en mode **Personnaliser**
+  sur une catégorie (même vide). Glisser une icône sur un groupe d'environnement la retire de sa catégorie.
 - Les conteneurs sans catégorie restent regroupés par environnement. Une étiquette indique l'environnement d'un conteneur rangé.
 - Supprimer une catégorie remet ses conteneurs dans leur environnement. Les groupes saisis avec une ancienne version
   sont repris automatiquement comme catégories.
 
 ## Ordre d'affichage et icônes
 
-- **Personnaliser** active le mode édition : chaque carte peut être déplacée par glisser-déposer ou avec les flèches ◀ ▶,
+- **Personnaliser** active le mode édition : chaque service peut être déplacé par glisser-déposer ou avec les flèches ◀ ▶,
   et les groupes avec les flèches ▲ ▼. L'ordre est enregistré dans `/data/config.json`.
 - **Icônes automatiques** : elles sont déduites du nom de l'image (puis du nom du conteneur) et téléchargées depuis la
   collection libre [dashboard-icons](https://github.com/homarr-labs/dashboard-icons), puis conservées dans `/data/icons`.
@@ -70,7 +73,7 @@ Les réglages de personnalisation sont enregistrés dans `/data/config.json`.
 
 ## Versions des images et mises à jour manuelles
 
-Chaque tuile indique la **Version** déclarée par le label `org.opencontainers.image.version`
+Le panneau de détails indique la **Version** déclarée par le label `org.opencontainers.image.version`
 (ou `org.label-schema.version`). À défaut, elle affiche le tag et l'identifiant abrégé de
 l'image utilisée : un tag comme `latest` n'est pas un numéro de version.
 La **Dernière mise à jour observée** indique quand DockPage a constaté un changement
@@ -86,7 +89,7 @@ observation non sauvegardée. Ne pas partager ce fichier entre plusieurs instanc
 Le **Dernier déploiement**, affiché séparément, correspond à la création du conteneur actuel :
 une recréation, même avec la même image, le change. Les dates utilisent le fuseau du navigateur.
 
-Chaque tuile affiche **Image à jour**, **Mise à jour disponible**, **Image figée** ou
+Le panneau de détails affiche **Image à jour**, **Mise à jour disponible**, **Image figée** ou
 **Vérification impossible**. Survoler l'indicateur donne le détail et la date de vérification.
 DockPage compare le digest de l'image utilisée par le conteneur avec celui du **tag configuré**
 dans le registre : `nginx:1.26` reste sur `1.26`, sans rechercher une nouvelle version majeure.
@@ -94,12 +97,12 @@ Les vérifications sont mises en cache pendant `UPDATE_CHECK_SECONDS`, même ave
 Les images locales sans digest et les registres privés non accessibles restent en état inconnu ;
 aucune mise à jour n'est déclenchée dans ce cas.
 
-Chaque tuile possède un bouton **Mettre à jour**, actif lorsqu'une nouvelle image est
+Le panneau de détails possède un bouton **Mettre à jour**, actif lorsqu'une nouvelle image est
 confirmée et que le conteneur est pris en charge. Une confirmation rappelle l'interruption
 du service et la perte des données hors volumes. DockPage demande alors à Portainer de
 télécharger le **tag actuel** et de recréer ce seul conteneur avec ses paramètres existants.
 Le nom de la carte et ses réglages restent associés au nom du conteneur.
-Le bouton indique l'opération en cours, puis son résultat ou son erreur sous la tuile.
+Le bouton indique l'opération en cours, puis son résultat ou son erreur dans le panneau de détails.
 La liste reflète le nouveau conteneur au prochain rafraîchissement.
 
 Les mises à jour automatiques sont supprimées : les anciens réglages `autoUpdate`
@@ -112,7 +115,7 @@ refusée jusqu'au redémarrage de DockPage, même si la réponse a été perdue.
 automatique n'a lieu : vérifier d'abord le résultat dans Portainer.
 
 Les conteneurs arrêtés, images figées par digest, services Swarm, DockPage et Portainer/agents
-ne sont pas recréés par ce bouton. La raison du blocage est affichée sous la tuile.
+ne sont pas recréés par ce bouton. La raison du blocage est affichée dans le panneau de détails.
 Un réseau `container:…` est également refusé après inspection.
 Pour ces cas, utiliser Portainer ou l'outil de déploiement. Pour une stack Compose, l'opération est
 individuelle : elle ne modifie pas le fichier Compose et ne coordonne pas les services dépendants.
@@ -127,7 +130,7 @@ Tests locaux (sans accès à un Docker réel) : `python3 -m unittest -v test_app
 
 ## Surveillance de disponibilité
 
-Dans **🔧 → Surveillance du service**, choisir HTTP / HTTPS ou TCP, puis enregistrer.
+Dans **Icône du service → Réglages → Surveillance du service**, choisir HTTP / HTTPS ou TCP, puis enregistrer.
 Le contrôle est désactivé par défaut. L'adresse peut être distincte du lien de la carte
 (par exemple `https://service/health` ou `tcp://192.168.1.210:5432`). Vide, elle reprend
 le lien de la carte, sinon le premier port détecté ; en TCP, son hôte et son port sont utilisés.
@@ -138,16 +141,16 @@ ou une connexion TCP réussie, indique **En ligne**. Les erreurs HTTP (dont 401/
 certificat HTTPS et délais dépassés indiquent **Hors ligne**. Le délai réseau est de cinq secondes ;
 les certificats HTTPS sont vérifiés. Le jeton Portainer n'est jamais envoyé à ces services.
 
-Chaque carte affiche la latence, les 60 derniers contrôles et leur pourcentage de réussite
+Le panneau de détails affiche la latence, les 60 derniers contrôles et leur pourcentage de réussite
 (ce n'est pas une disponibilité calculée sur 24 heures). Survoler une barre affiche sa date et
 son résultat. La date et le détail du dernier contrôle (réponse HTTP ou erreur), l'intervalle
-et l'heure prévue du prochain contrôle sont visibles directement sur la carte. Les cartes
+et l'heure prévue du prochain contrôle sont visibles dans le panneau de détails. Les cartes
 surveillées restent visibles même sans lien à ouvrir. Un résultat ancien repasse en attente.
 L'état du conteneur reste affiché séparément :
 un conteneur en marche peut héberger un service inaccessible. Le résumé signale aussi les échecs
 pour les services surveillés dont l'environnement Portainer est indisponible.
 
-Dans **🔧 → Intervalle de vérification (secondes)**, régler chaque service de 10 à 86400 secondes.
+Dans **Icône du service → Réglages → Intervalle de vérification (secondes)**, régler chaque service de 10 à 86400 secondes.
 Laisser le champ vide utilise `MONITOR_INTERVAL_SECONDS` (60 secondes par défaut, minimum 10).
 Chaque service est contrôlé indépendamment lorsque son intervalle depuis le dernier résultat
 est écoulé ; changer l'intervalle conserve l'historique. Le serveur recherche les contrôles dus
