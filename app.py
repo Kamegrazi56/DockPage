@@ -668,7 +668,7 @@ main{max-width:1480px;margin:0 auto;padding:22px 24px 80px}
 .launch .tile img{width:68px;height:68px}
 .launch .name{font-family:Georgia,serif;font-size:1.3rem;white-space:normal;overflow-wrap:anywhere}
 .launch .sub{white-space:normal;overflow-wrap:anywhere;margin-bottom:8px}
-.launch .pill{background:transparent;padding:0;font-weight:400;white-space:normal;text-align:left;font-size:.85rem}
+.launch .pill{background:transparent;padding:4px 11px;max-width:100%;font-weight:400;white-space:normal;text-align:left;font-size:.85rem}
 .launch .pill::before{flex:none}
 .launcher.editing{outline:1px dashed var(--line);border-radius:8px;cursor:grab}
 .launcher.drag{opacity:.35}
@@ -771,7 +771,7 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
 }
 @media(max-width:480px){
   .grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 8px}
-  .launch{padding:18px 4px 24px}.launch .name{font-size:1.05rem}.launch .pill{font-size:.75rem}
+  .launch{padding:18px 4px 24px}.launch .name{font-size:1.05rem}.launch .pill{font-size:.75rem;padding:4px 8px}
   .ctl{flex-wrap:wrap}.browse-bar{gap:12px}header{padding:20px 16px}
 }
 
