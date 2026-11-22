@@ -90,7 +90,7 @@ def deployed_version(c):
     return " · ".join(part for part in ("Tag " + tag, identity) if part)
 
 
-def auto_update_reason(c):
+def update_reason(c):
     image = c.get("Image", "").lower()
     labels = c.get("Labels") or {}
     if "@" in image or image.startswith("sha256:") or not image:
@@ -101,38 +101,46 @@ def auto_update_reason(c):
             os.environ.get("HOSTNAME") and c.get("Id", "").startswith(os.environ["HOSTNAME"])):
         return "Mettre à jour DockPage et Portainer depuis un outil externe."
     if c.get("State") != "running":
-        return "Mise à jour automatique réservée aux conteneurs en marche."
+        return "Mise à jour réservée aux conteneurs en marche."
     return ""
 
 
-def maybe_update(endpoint, key, c, version):
-    """Une tentative par intervalle ; jamais de recréation sur un statut incertain."""
-    reason = auto_update_reason(c)
-    version["autoBlocked"] = reason
-    if reason or load_items().get(key, {}).get("autoUpdate") is not True:
-        return
-    attempt = update_attempts.get(key)
-    if attempt and time.time() - attempt[0] < UPDATE_INTERVAL:
-        if attempt[1]:
-            version.update(state="error", detail=attempt[1])
-        return
-    if version["state"] != "available":
-        return
-    update_attempts[key] = (time.time(), "")
+def manual_update(endpoint, container_id):
+    """Action explicite uniquement ; relit la cible et interdit les doubles demandes."""
+    if type(endpoint) is not int or endpoint < 1 or not isinstance(container_id, str) or not re.fullmatch(r"[a-zA-Z0-9]+", container_id):
+        raise ValueError("Conteneur ou environnement invalide.")
+    if not refresh_lock.acquire(blocking=False):
+        raise ValueError("Une opération est en cours. Réessayer après son achèvement.")
     try:
-        base = "/endpoints/%s/docker/containers/%s/json" % (endpoint, c["Id"])
-        inspected = api(base)
+        containers = api("/endpoints/%s/docker/containers/json?all=1" % endpoint)
+        c = next((c for c in containers if c["Id"] == container_id), None)
+        if c is None:
+            raise ValueError("Le conteneur a changé ou a disparu. Actualiser la page.")
+        reason = update_reason(c)
+        if reason:
+            raise ValueError(reason)
+        attempt_key = (endpoint, container_id)
+        if attempt_key in update_attempts:
+            raise ValueError("Une demande a déjà été envoyée pour ce conteneur. Vérifier son état dans Portainer avant toute autre intervention.")
+        versions.pop((endpoint, c.get("ImageID"), c.get("Image", "")), None)
+        version = image_version(endpoint, c)
+        if version["state"] != "available":
+            raise ValueError("Aucune mise à jour confirmée : " + version["detail"])
+        inspected = api("/endpoints/%s/docker/containers/%s/json" % (endpoint, container_id))
         if not inspected.get("State", {}).get("Running"):
             raise ValueError("Le conteneur n'est plus en marche.")
         if inspected.get("HostConfig", {}).get("NetworkMode", "").startswith("container:"):
             raise ValueError("Réseau partagé avec un autre conteneur : utiliser Portainer.")
-        api("/docker/%s/containers/%s/recreate" % (endpoint, c["Id"]), {"PullImage": True})
+        # Une réponse perdue peut cacher une recréation réussie : ne jamais relancer automatiquement.
+        update_attempts[attempt_key] = time.time()
+        try:
+            api("/docker/%s/containers/%s/recreate" % (endpoint, container_id), {"PullImage": True})
+        except Exception as error:
+            raise ValueError("Résultat de mise à jour incertain : %s. Vérifier le conteneur dans Portainer." % error)
         versions.pop((endpoint, c.get("ImageID"), c.get("Image", "")), None)
-        version.update(state="updated", detail="Recréé par Portainer ; vérification au prochain rafraîchissement.")
-    except Exception as e:
-        message = "Échec de mise à jour : %s. Vérifier le conteneur dans Portainer." % e
-        update_attempts[key] = (time.time(), message)
-        version.update(state="error", detail=message)
+        return {"message": "Recréation effectuée par Portainer. La liste sera actualisée au prochain cycle."}
+    finally:
+        refresh_lock.release()
 
 
 def validate_monitor(data):
@@ -361,7 +369,7 @@ def collect():
                     name = (c.get("Names") or ["/?"])[0].lstrip("/")
                     key = "%s/%s" % (ep["Name"], name)
                     version = image_version(ep["Id"], c)
-                    maybe_update(ep["Id"], key, c, version)
+                    version["updateBlocked"] = update_reason(c)
                     ports, seen = [], set()
                     for p in c.get("Ports") or []:
                         pub = p.get("PublicPort")
@@ -371,7 +379,7 @@ def collect():
                         https = pub in HTTPS_PORTS or p.get("PrivatePort") in HTTPS_PORTS
                         ports.append({"port": pub, "url": "%s://%s:%s" % ("https" if https else "http", host, pub)})
                     entry["containers"].append({
-                        "key": key, "name": name, "image": c.get("Image", ""), "version": version,
+                        "key": key, "id": c["Id"], "name": name, "image": c.get("Image", ""), "version": version,
                         "deployedVersion": deployed_version(c), "deployedAt": c.get("Created"),
                         "imageId": c.get("ImageID"),
                         "state": c.get("State", ""), "status": c.get("Status", ""), "ports": ports,
@@ -500,12 +508,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/refresh":  # actualisation manuelle : relit Portainer maintenant
             refresh()
             return self.send(200, "{}")
-        if self.path not in ("/api/item", "/api/envs", "/api/order", "/api/categories", "/api/move"):
+        if self.path not in ("/api/item", "/api/envs", "/api/order", "/api/categories", "/api/move", "/api/update"):
             return self.send(404, "{}")
         if self.headers.get_content_type() != "application/json":
             return self.send(415, json.dumps({"error": "Content-Type application/json requis"}))
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+            if self.path == "/api/update":
+                result = manual_update(body.get("endpoint"), body.get("id"))
+                return self.send(200, json.dumps(result))
             cfg = load_config()
             if self.path == "/api/categories":
                 apply_categories(cfg, body["categories"])
@@ -533,10 +544,8 @@ class Handler(BaseHTTPRequestHandler):
                 old_item = items.get(key, {})
                 if data:
                     validate_monitor(data)
-                    if "autoUpdate" in data and type(data["autoUpdate"]) is not bool:
-                        raise ValueError("autoUpdate doit être un booléen")
                     items[key] = {k: v for k, v in data.items()
-                                  if k in ("name", "url", "group", "icon", "hidden", "autoUpdate", "monitor", "monitorUrl", "monitorInterval") and v not in ("", None, False)}
+                                  if k in ("name", "url", "group", "icon", "hidden", "monitor", "monitorUrl", "monitorInterval") and v not in ("", None, False)}
                 else:
                     items.pop(key, None)
             else:
@@ -588,6 +597,7 @@ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 ui-rounded,"S
 button,input,select{font:inherit;color:inherit}
 :focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 
+.update-action{padding:8px 12px 12px;display:grid;gap:6px}
 /* Barre du haut */
 header{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:14px 20px;align-items:center;justify-content:space-between;padding:14px max(16px,calc((100% - 1240px)/2 + 24px));background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 .brand{display:flex;align-items:center;gap:14px;min-width:0}
@@ -649,8 +659,9 @@ main{max-width:1240px;margin:0 auto;padding:22px 24px 80px}
 .group.collapsed .grid{display:none}
 
 /* Cartes */
-.card-wrap{position:relative}
-.card-wrap .card{height:100%}
+.card-wrap{position:relative;display:flex;flex-direction:column}
+.card-wrap .card{flex:1}
+.card-wrap .update-action{flex:none}
 .card-wrap .head{padding-right:50px}
 .card-settings{position:absolute;top:17px;right:17px}
 .card{position:relative;display:flex;flex-direction:column;gap:12px;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);color:inherit;text-decoration:none;transition:transform .15s,box-shadow .15s,border-color .15s}
@@ -746,9 +757,6 @@ dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
   <label>Surveillance du service<select id="f_monitor"><option value="">Désactivée</option><option value="http">HTTP / HTTPS</option><option value="tcp">Connexion TCP</option></select></label>
   <label>Adresse à surveiller<small>Vide = lien de la carte ou premier port détecté. HTTP : réponse 200–399 ; TCP : connexion au port.</small><input type="text" id="f_monitorUrl" placeholder="https://service/health ou tcp://192.168.1.210:5432"></label>
   <label>Intervalle de vérification (secondes)<small>De 10 à 86400 secondes. Vide = valeur par défaut du serveur. Appliqué après le dernier contrôle.</small><input type="number" id="f_monitorInterval" min="10" max="86400" step="1"></label>
-  <label class="chk"><input type="checkbox" id="f_autoUpdate">Mise à jour automatique</label>
-  <p class="lead" id="updateHelp"></p>
-  <p class="lead">Le tag actuel est conservé. Une nouvelle image entraîne la recréation du conteneur et une interruption du service. Les données doivent être stockées dans des volumes.</p>
   <p id="itemError" role="alert"></p>
   <div class="row"><button type="button" class="btn danger" id="reset">Réinitialiser</button><button type="button" class="btn" id="cancel">Annuler</button><button class="btn primary" id="save" value="ok">Enregistrer</button></div>
 </form></dialog>
@@ -770,6 +778,7 @@ dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
 
 <script>
 const $=s=>document.querySelector(s);let D=null,edit=false,cur=null;
+const updating=new Set(),updateResults=new Map();
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
 const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let showAll=!!store.get('dp-all',false);const collapsed=new Set(store.get('dp-collapsed',[]));
@@ -896,7 +905,6 @@ function render(){
       const v=c.version||{},vs={current:['ok','Image à jour'],available:['warn','Mise à jour disponible'],unknown:['','Vérification impossible'],pinned:['','Image figée'],updated:['ok','Mise à jour effectuée'],error:['bad','Échec de mise à jour']};
       const [vc,vt]=vs[v.state]||['','Vérification en attente'];
       const badge=el('span','pill '+vc,vt);badge.title=(v.detail||'')+(v.checked?' — Vérifié le '+v.checked:'');foot.append(badge);
-      if(o.autoUpdate){const a=el('span','tag',v.autoBlocked?'Auto en pause':'Màj auto');a.title=v.autoBlocked||'Mise à jour automatique activée';foot.append(a)}
       if(o.group)foot.append(el('span','tag',env.label||env.name));  // d'où vient un conteneur rangé dans une catégorie
       card.append(head,foot);
       if(o.monitor){
@@ -941,10 +949,31 @@ function render(){
       const wrap=el('div','card-wrap'),settings=el('button','btn icon-btn card-settings','🔧');
       settings.type='button';settings.title='Modifier le lien';settings.setAttribute('aria-label','Modifier le lien de '+(o.name||c.name));
       settings.onclick=()=>{openItem(c,o);$('#f_url').focus()};
-      wrap.append(card,settings);grid.append(wrap);
+      const action=el('div','update-action'),button=el('button','btn sm',updating.has(c.key)?'Mise à jour en cours…':'Mettre à jour');
+      button.type='button';
+      const blocked=v.updateBlocked||(v.state==='current'?'Image déjà à jour':v.state!=='available'?'Aucune mise à jour confirmée':'');
+      button.disabled=updating.has(c.key)||!!blocked;
+      button.title=blocked||'Télécharger le tag actuel et recréer ce conteneur';
+      button.setAttribute('aria-label','Mettre à jour '+(o.name||c.name));
+      button.onclick=()=>updateContainer(env,c,o);
+      const result=el('div','sub metadata',updateResults.get(c.key)||blocked);
+      result.setAttribute('role','status');action.append(button,result);
+      wrap.append(card,settings,action);grid.append(wrap);
     });
     sec.append(grid);out.append(sec);
   });
+}
+async function updateContainer(env,c,o){
+  if(updating.has(c.key))return;
+  if(!confirm('Mettre à jour '+(o.name||c.name)+' ? Le tag actuel sera conservé. Le service sera interrompu pendant la recréation. Les données hors volumes seront perdues.'))return;
+  updating.add(c.key);updateResults.delete(c.key);render();
+  try{
+    const r=await fetch('api/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({endpoint:env.id,id:c.id})});
+    const result=await r.json();
+    if(!r.ok)throw Error(result.error||'Mise à jour impossible');
+    updateResults.set(c.key,result.message);
+  }catch(e){updateResults.set(c.key,e.message+' Aucune nouvelle tentative automatique.')}
+  finally{updating.delete(c.key);render();load()}
 }
 // Icône : champ « icône » du conteneur (URL, nom de la collection ou emoji), sinon détection automatique
 function fillIcon(box,c,o){
@@ -967,13 +996,10 @@ function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   $('#f_monitorInterval').value=o.monitorInterval||'';
   $('#f_monitorInterval').placeholder=D.monitorInterval+' (défaut)';
   $('#f_name').placeholder=c.name;
-  $('#f_autoUpdate').checked=!!o.autoUpdate;
-  $('#f_autoUpdate').disabled=!!(c.version||{}).autoBlocked&&!o.autoUpdate;
-  $('#updateHelp').textContent=(c.version||{}).autoBlocked||'Vérification périodique du registre, sans changer de tag.';
   $('#itemError').textContent='';
   $('#f_hidden').checked=!!o.hidden;$('#dlg').showModal()}
 async function post(data){try{const r=await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});if(!r.ok)throw Error((await r.json()).error||'Enregistrement impossible');$('#dlg').close();load()}catch(e){$('#itemError').textContent=e.message}}
-$('#save').onclick=e=>{e.preventDefault();if(!$('#f_monitorInterval').reportValidity())return;const d={monitorInterval:$('#f_monitorInterval').value?Number($('#f_monitorInterval').value):null,hidden:$('#f_hidden').checked,autoUpdate:$('#f_autoUpdate').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
+$('#save').onclick=e=>{e.preventDefault();if(!$('#f_monitorInterval').reportValidity())return;const d={monitorInterval:$('#f_monitorInterval').value?Number($('#f_monitorInterval').value):null,hidden:$('#f_hidden').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
 $('#reset').onclick=()=>post(null);$('#cancel').onclick=()=>$('#dlg').close();
 
 /* Fenêtre « Catégories » */

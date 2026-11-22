@@ -68,7 +68,7 @@ Le tableau de bord n'a pas d'authentification : à garder sur le réseau local, 
 Le jeton Portainer donne un large accès : le stocker uniquement dans les variables de la stack.
 Les réglages de personnalisation sont enregistrés dans `/data/config.json`.
 
-## Versions des images et mises à jour automatiques
+## Versions des images et mises à jour manuelles
 
 Chaque tuile indique la **Version** déclarée par le label `org.opencontainers.image.version`
 (ou `org.label-schema.version`). À défaut, elle affiche le tag et l'identifiant abrégé de
@@ -94,17 +94,26 @@ Les vérifications sont mises en cache pendant `UPDATE_CHECK_SECONDS`, même ave
 Les images locales sans digest et les registres privés non accessibles restent en état inconnu ;
 aucune mise à jour n'est déclenchée dans ce cas.
 
-Dans **🔧 → Mise à jour automatique → Enregistrer**, activer le réglage pour chaque conteneur souhaité.
-Il est désactivé par défaut et conservé dans `/data/config.json` avec la personnalisation de la carte.
-Au prochain cycle, si une nouvelle image est détectée, DockPage demande à Portainer de télécharger
-l'image et de recréer le conteneur avec ses paramètres existants. Le service est interrompu pendant
-l'opération ; conserver les données dans des volumes, car la couche inscriptible du conteneur est remplacée.
-Le nom de la carte et ses réglages restent associés au nom du conteneur, même si son identifiant change.
-Après une erreur, la tuile l'indique et aucune nouvelle tentative n'a lieu pendant l'intervalle de vérification
-(ce délai de tentative est conservé en mémoire jusqu'au redémarrage de DockPage).
+Chaque tuile possède un bouton **Mettre à jour**, actif lorsqu'une nouvelle image est
+confirmée et que le conteneur est pris en charge. Une confirmation rappelle l'interruption
+du service et la perte des données hors volumes. DockPage demande alors à Portainer de
+télécharger le **tag actuel** et de recréer ce seul conteneur avec ses paramètres existants.
+Le nom de la carte et ses réglages restent associés au nom du conteneur.
+Le bouton indique l'opération en cours, puis son résultat ou son erreur sous la tuile.
+La liste reflète le nouveau conteneur au prochain rafraîchissement.
+
+Les mises à jour automatiques sont supprimées : les anciens réglages `autoUpdate`
+éventuellement présents sont ignorés et disparaissent à la prochaine sauvegarde de la carte.
+Les vérifications périodiques du registre restent actives, sans déclencher de recréation.
+La demande manuelle revérifie la cible et le registre avant d'agir. Une opération simultanée
+est refusée ; si une lecture de Portainer est en cours, réessayer après son achèvement.
+Après l'envoi d'une demande de recréation, une deuxième demande pour le même identifiant est
+refusée jusqu'au redémarrage de DockPage, même si la réponse a été perdue. Aucun nouvel essai
+automatique n'a lieu : vérifier d'abord le résultat dans Portainer.
 
 Les conteneurs arrêtés, images figées par digest, services Swarm, DockPage et Portainer/agents
-ne sont pas recréés automatiquement. Un réseau `container:…` empêche aussi la recréation.
+ne sont pas recréés par ce bouton. La raison du blocage est affichée sous la tuile.
+Un réseau `container:…` est également refusé après inspection.
 Pour ces cas, utiliser Portainer ou l'outil de déploiement. Pour une stack Compose, l'opération est
 individuelle : elle ne modifie pas le fichier Compose et ne coordonne pas les services dépendants.
 La fonctionnalité nécessite que la version de Portainer expose son action de recréation et que

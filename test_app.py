@@ -57,43 +57,69 @@ class UpdatesTest(unittest.TestCase):
             app.image_version(1, self.container)
             self.assertEqual(api.call_count, 6)
 
-    def test_opt_in_and_safe_states(self):
-        with patch.object(app, "load_items", return_value={}), patch.object(app, "api") as api:
-            app.maybe_update(1, "host/web", self.container, {"state": "available"})
-            api.assert_not_called()
-        with patch.object(app, "load_items", return_value={"host/web": {"autoUpdate": True}}), patch.object(app, "api") as api:
-            for state in ["current", "unknown", "pinned"]:
-                app.maybe_update(1, "host/web", self.container, {"state": state})
-            for changes in [{"State": "exited"}, {"Labels": {"com.docker.swarm.service.id": "svc"}},
-                            {"Image": "portainer/agent:latest"}, {"Image": "me/dockpage:latest"}]:
-                c = dict(self.container, **changes)
-                version = {"state": "available"}
-                app.maybe_update(1, "host/web", c, version)
-                self.assertTrue(version["autoBlocked"])
-            api.assert_not_called()
+    def test_legacy_auto_setting_never_recreates_during_collect(self):
+        endpoint = {"Id": 1, "Name": "host", "Type": 1, "Status": 1}
+        app.save_config({"items": {"host/web": {"autoUpdate": True}}})
+        with patch.object(app, "api", side_effect=[[endpoint], [self.container]]) as api, \
+                patch.object(app, "image_version", return_value={"state": "available"}):
+            app.collect()
+            self.assertTrue(all(len(call.args) == 1 for call in api.call_args_list))
 
-    def test_recreate_and_no_duplicate(self):
+    def test_manual_recreate_and_no_duplicate(self):
         inspect = {"State": {"Running": True}, "HostConfig": {"NetworkMode": "bridge"}}
-        with patch.object(app, "load_items", return_value={"host/web": {"autoUpdate": True}}), patch.object(app, "api", side_effect=[inspect, {}]) as api:
-            version = {"state": "available"}
-            app.maybe_update(1, "host/web", self.container, version)
-            self.assertEqual(version["state"], "updated")
+        with patch.object(app, "api", side_effect=[[self.container], inspect, {}, [self.container]]) as api, \
+                patch.object(app, "image_version", return_value={"state": "available"}):
+            self.assertIn("message", app.manual_update(1, "abc"))
             self.assertEqual(api.call_args.args, ("/docker/1/containers/abc/recreate", {"PullImage": True}))
-            app.maybe_update(1, "host/web", self.container, {"state": "available"})
-            self.assertEqual(api.call_count, 2)
+            with self.assertRaisesRegex(ValueError, "déjà"):
+                app.manual_update(1, "abc")
+            self.assertEqual(api.call_count, 4)
 
-    def test_failure_and_shared_network(self):
-        inspect = {"State": {"Running": True}, "HostConfig": {"NetworkMode": "container:vpn"}}
-        for responses in [[inspect], [OSError("timeout")]]:
-            app.update_attempts.clear()
-            with patch.object(app, "load_items", return_value={"host/web": {"autoUpdate": True}}), patch.object(app, "api", side_effect=responses) as api:
-                version = {"state": "available"}
-                app.maybe_update(1, "host/web", self.container, version)
-                self.assertEqual(version["state"], "error")
-                again = {"state": "available"}
-                app.maybe_update(1, "host/web", self.container, again)
-                self.assertEqual(again["state"], "error")
+    def test_manual_safe_states(self):
+        for changes in [{"State": "exited"}, {"Labels": {"com.docker.swarm.service.id": "svc"}},
+                        {"Image": "portainer/agent:latest"}, {"Image": "me/dockpage:latest"},
+                        {"Image": "nginx@sha256:fixed"}]:
+            with self.subTest(changes=changes), patch.object(app, "api", return_value=[dict(self.container, **changes)]) as api:
+                with self.assertRaises(ValueError):
+                    app.manual_update(1, "abc")
                 self.assertEqual(api.call_count, 1)
+        for state in ["current", "unknown", "pinned"]:
+            with patch.object(app, "api", return_value=[self.container]) as api, \
+                    patch.object(app, "image_version", return_value={"state": state, "detail": state}):
+                with self.assertRaises(ValueError):
+                    app.manual_update(1, "abc")
+                self.assertEqual(api.call_count, 1)
+
+    def test_manual_failure_and_shared_network(self):
+        for inspect in [{"State": {"Running": False}},
+                        {"State": {"Running": True}, "HostConfig": {"NetworkMode": "container:vpn"}}]:
+            with patch.object(app, "api", side_effect=[[self.container], inspect]) as api, \
+                    patch.object(app, "image_version", return_value={"state": "available"}):
+                with self.assertRaises(ValueError):
+                    app.manual_update(1, "abc")
+                self.assertEqual(api.call_count, 2)
+        inspect = {"State": {"Running": True}}
+        with patch.object(app, "api", side_effect=[[self.container], inspect, OSError("timeout"), [self.container]]) as api, \
+                patch.object(app, "image_version", return_value={"state": "available"}):
+            with self.assertRaisesRegex(ValueError, "incertain"):
+                app.manual_update(1, "abc")
+            with self.assertRaisesRegex(ValueError, "déjà"):
+                app.manual_update(1, "abc")
+            self.assertEqual(api.call_count, 4)
+
+    def test_manual_stale_target_and_concurrent_request(self):
+        with patch.object(app, "api", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "disparu"):
+                app.manual_update(1, "abc")
+        with app.refresh_lock, patch.object(app, "api") as api:
+            with self.assertRaisesRegex(ValueError, "en cours"):
+                app.manual_update(1, "abc")
+            api.assert_not_called()
+        with patch.object(app, "api") as api:
+            for endpoint, identity in [(True, "abc"), (1, "../abc"), ("1", "abc"), (1, None)]:
+                with self.assertRaises(ValueError):
+                    app.manual_update(endpoint, identity)
+            api.assert_not_called()
 
     def test_collect_survives_registry_failure(self):
         endpoint = {"Id": 1, "Name": "host", "Type": 1, "Status": 1}
@@ -181,7 +207,7 @@ class UpdatesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             app.record_image_changes(envs)
 
-    def test_http_setting_persists_and_can_be_disabled(self):
+    def test_http_legacy_setting_ignored_and_manual_route(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(app, "CONFIG_PATH", folder + "/config.json"):
             server = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
             thread = threading.Thread(target=server.serve_forever)
@@ -195,9 +221,9 @@ class UpdatesTest(unittest.TestCase):
                         self.assertEqual(response.status, 200)
                     with urllib.request.urlopen(url + "/api/data") as response:
                         item = json.load(response)["items"]["host/web"]
-                    self.assertEqual(item.get("autoUpdate", False), enabled)
+                    self.assertNotIn("autoUpdate", item)
                     self.assertEqual(item["name"], "Web")
-                for content_type, value, status in [("text/plain", True, 415), ("application/json", "true", 400)]:
+                for content_type, value, status in [("text/plain", True, 415)]:
                     data = json.dumps({"key": "host/web", "data": {"autoUpdate": value}}).encode()
                     req = urllib.request.Request(url + "/api/item", data=data, headers={"Content-Type": content_type})
                     with self.assertRaises(urllib.error.HTTPError) as error:
@@ -205,6 +231,18 @@ class UpdatesTest(unittest.TestCase):
                     self.assertEqual(error.exception.code, status)
                     error.exception.close()
                     self.assertNotIn("autoUpdate", app.load_items()["host/web"])
+                with patch.object(app, "manual_update", return_value={"message": "ok"}) as update:
+                    data = json.dumps({"endpoint": 1, "id": "abc"}).encode()
+                    req = urllib.request.Request(url + "/api/update", data=data, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req) as response:
+                        self.assertEqual(json.load(response), {"message": "ok"})
+                    update.assert_called_once_with(1, "abc")
+                with patch.object(app, "manual_update", side_effect=ValueError("bloqué")):
+                    with self.assertRaises(urllib.error.HTTPError) as error:
+                        urllib.request.urlopen(req)
+                    self.assertEqual(error.exception.code, 400)
+                    self.assertEqual(json.load(error.exception), {"error": "bloqué"})
+                    error.exception.close()
             finally:
                 server.shutdown()
                 thread.join()
