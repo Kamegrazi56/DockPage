@@ -21,6 +21,7 @@ L'image est construite et publiée automatiquement par GitHub Actions sur `ghcr.
 | `TITLE` | Titre de la page |
 | `REFRESH_SECONDS` | Intervalle de rafraîchissement (30 par défaut) |
 | `UPDATE_CHECK_SECONDS` | Intervalle de vérification des images (3600 par défaut, minimum 300 secondes) |
+| `UBUNTU_STATUS_PATH` | Fichier de relevé APT partagé avec l’hôte (`/data/ubuntu-updates.json` par défaut) |
 
 3. Ouvrir `http://IP_DU_SERVEUR:8088`.
 
@@ -45,6 +46,37 @@ prioritaires sur la variable `HOSTS`, qui reste utilisable comme valeur par déf
 
 Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doit être public
 (GitHub → profil → *Packages* → `dockpage` → *Package settings* → *Change visibility*).
+
+## Onglet Serveur Ubuntu
+
+L’onglet **Serveur Ubuntu** indique si des mises à jour de paquets APT sont disponibles,
+leur nombre et l’heure du dernier contrôle. Il ne lance aucune installation. Si le
+relevé manque, est illisible, date de plus de 24 heures ou signale une erreur APT,
+l’onglet affiche **Vérification impossible** au lieu de déclarer le serveur à jour.
+Le bouton **Relire** charge le dernier relevé ; il ne déclenche pas un contrôle APT.
+
+Portainer ne fournit pas l’état des paquets du système hôte. Sur le serveur Ubuntu,
+installer le script `ubuntu_status.py` et le lancer régulièrement. Le chemin ci-dessous
+correspond au volume de données de `docker-compose.yml` ; l’adapter si votre stack
+utilise un autre dossier :
+
+```sh
+sudo install -m 755 ubuntu_status.py /usr/local/sbin/dockpage-ubuntu-status.py
+sudo python3 /usr/local/sbin/dockpage-ubuntu-status.py /home/kamegrazi/docker/dockpage/data/ubuntu-updates.json
+sudo crontab -e
+```
+
+Ajouter cette ligne à la crontab de `root` pour un contrôle toutes les six heures :
+
+```cron
+0 */6 * * * /usr/bin/python3 /usr/local/sbin/dockpage-ubuntu-status.py /home/kamegrazi/docker/dockpage/data/ubuntu-updates.json >> /var/log/dockpage-ubuntu-status.log 2>&1
+```
+
+Le script exécute `apt-get update`, puis compte les paquets signalés par
+`apt list --upgradable`. Il écrit seulement une date et un nombre (ou une erreur)
+dans le fichier partagé, sans installer de paquets. Il faut que ce dossier soit
+monté dans DockPage sous `/data`, comme dans la stack fournie. Le contrôle concerne
+l’hôte sur lequel le script s’exécute, et non les autres environnements Portainer.
 
 ## Catégories
 

@@ -23,6 +23,8 @@ MONITOR_TIMEOUT = 5
 PORT = int(os.environ.get("PORT", "8080"))
 TITLE = os.environ.get("TITLE", "Homelab")
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/data/config.json")
+UBUNTU_STATUS_PATH = os.environ.get("UBUNTU_STATUS_PATH", "/data/ubuntu-updates.json")
+UBUNTU_STATUS_MAX_AGE = 24 * 3600
 # "NomEnvironnement=192.168.1.20,Autre=nas.local"
 HOSTS = dict(p.split("=", 1) for p in os.environ.get("HOSTS", "").split(",") if "=" in p)
 HTTPS_PORTS = (443, 8443, 9443)
@@ -36,6 +38,30 @@ cache = {"environments": [], "updated": None, "error": None}
 versions = {}
 update_attempts = {}
 monitors = {}
+
+
+def ubuntu_status():
+    """Lit le relevé APT produit sur l'hôte, sans exécuter de commande système dans Docker."""
+    try:
+        with open(UBUNTU_STATUS_PATH, "r", encoding="utf-8") as f:
+            report = json.load(f)
+        if not isinstance(report, dict):
+            raise ValueError("Format du relevé invalide")
+        checked = report.get("checkedAt")
+        if type(checked) not in (int, float) or not 0 < checked <= time.time() + 300:
+            raise ValueError("Date du relevé invalide")
+        if time.time() - checked > UBUNTU_STATUS_MAX_AGE:
+            return {"state": "unknown", "detail": "Le dernier relevé a plus de 24 heures.", "checkedAt": checked}
+        if report.get("error"):
+            return {"state": "unknown", "detail": "La vérification APT a échoué.", "checkedAt": checked}
+        count = report.get("count")
+        if type(count) is not int or not 0 <= count <= 100000:
+            raise ValueError("Nombre de mises à jour invalide")
+        return {"state": "available" if count else "current", "count": count, "checkedAt": checked}
+    except FileNotFoundError:
+        return {"state": "unknown", "detail": "Aucun relevé Ubuntu disponible. Configurer le contrôle sur le serveur."}
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {"state": "unknown", "detail": "Le relevé Ubuntu est illisible ou invalide."}
 
 
 def api(path, data=None):
@@ -482,6 +508,7 @@ class Handler(BaseHTTPRequestHandler):
                 payload = dict(cache, title=TITLE, items=cfg.get("items", {}), envs=cfg.get("envs", {}),
                                order=cfg.get("order", {}), groupOrder=cfg.get("groupOrder", []),
                                categories=categories_of(cfg), monitors=dict(monitors), monitorInterval=MONITOR_INTERVAL)
+            payload["ubuntu"] = ubuntu_status()
             self.send(200, json.dumps(payload))
         elif self.path.split("?")[0] == "/icon":
             path = icon_file(urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("n", []))
@@ -735,6 +762,15 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
 .summary{padding-bottom:20px;border-bottom:1px solid var(--line)}
 .summary .chip:not(.toggle){background:transparent;padding-left:0;font-weight:500}
 .browse-bar{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-bottom:28px}
+.main-tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-bottom:24px}
+.main-tab{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:12px 2px;cursor:pointer;font-size:1rem}
+.main-tab[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
+.ubuntu-card{max-width:700px;padding:24px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow)}
+.ubuntu-card h2{font:700 1.8rem/1.2 Georgia,serif;margin:0 0 16px}
+.ubuntu-card p{color:var(--muted);line-height:1.5}
+.ubuntu-card .pill{font-size:.9rem;padding:7px 12px}
+.ubuntu-card .metadata{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);font-size:.85rem}
+[hidden]{display:none!important}
 #group-filters{display:flex;gap:24px;overflow-x:auto;max-width:100%;border-bottom:1px solid var(--line)}
 .group-filter{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:12px 2px;cursor:pointer;white-space:nowrap;font-size:1rem}
 .group-filter[aria-pressed=true]{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
@@ -790,6 +826,11 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
   </div>
 </header>
 <main>
+  <nav class="main-tabs" role="tablist" aria-label="Pages du tableau de bord">
+    <button type="button" class="main-tab" id="services-tab" role="tab" aria-controls="services-view" aria-selected="true" data-focus="tab-services">Services</button>
+    <button type="button" class="main-tab" id="ubuntu-tab" role="tab" aria-controls="ubuntu-view" aria-selected="false" data-focus="tab-ubuntu">Serveur Ubuntu</button>
+  </nav>
+  <div id="services-view" role="tabpanel" aria-labelledby="services-tab">
   <div id="msg"></div>
   <div id="summary" class="summary"></div>
   <div id="editbar" class="editbar" hidden>
@@ -804,6 +845,13 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
     <div id="details-body"></div>
   </aside>
   </div>
+  </div>
+  <section id="ubuntu-view" role="tabpanel" aria-labelledby="ubuntu-tab" hidden>
+    <div class="ubuntu-card">
+      <h2>Mises à jour du serveur Ubuntu</h2>
+      <div id="ubuntu-status" role="status" aria-live="polite"></div>
+    </div>
+  </section>
 </main>
 
 <dialog id="dlg"><form method="dialog" onsubmit="return false">
@@ -840,6 +888,7 @@ const $=s=>document.querySelector(s);let D=null,edit=false,cur=null,selectedKey,
 const updating=new Set(),updateResults=new Map();
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
 const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+let activePage=store.get('dp-page','services')==='ubuntu'?'ubuntu':'services';
 let showAll=!!store.get('dp-all',false);const collapsed=new Set(store.get('dp-collapsed',[]));
 const CHEV='<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
 
@@ -873,12 +922,37 @@ function friendly(err){
 function banner(kind,title,text,detail){const b=el('div','banner'+(kind?' '+kind:''));b.append(el('strong',null,title));if(text)b.append(el('p',null,text));if(detail)b.append(el('small',null,detail));return b}
 const hue=s=>{let h=0;for(const ch of s)h=(h*31+ch.charCodeAt(0))%360;return h};
 
-async function load(){try{const r=await fetch('api/data');D=await r.json();render()}catch(e){$('#msg').replaceChildren(banner('bad','Impossible de joindre le tableau de bord','Vérifie que le conteneur DockPage est bien démarré.'))}}
+async function load(){try{const r=await fetch('api/data');if(!r.ok)throw Error('Réponse du serveur invalide');D=await r.json();render();return true}
+  catch(e){if(D)D.ubuntu={state:'unknown',detail:'Impossible de joindre DockPage.'};
+    if(activePage==='ubuntu')render();
+    else $('#msg').replaceChildren(banner('bad','Impossible de joindre le tableau de bord','Vérifie que le conteneur DockPage est bien démarré.'));
+    return false}}
+
+function renderUbuntu(){
+  const box=$('#ubuntu-status'),u=D?.ubuntu||{state:'unknown',detail:'Impossible de joindre DockPage.'};
+  box.replaceChildren();
+  const available=u.state==='available',current=u.state==='current';
+  const label=available?u.count+' mise'+(u.count>1?'s':'')+' à jour disponible'+(u.count>1?'s':''):
+    current?'Serveur à jour':'Vérification impossible';
+  box.append(el('span','pill '+(available?'warn':current?'ok':'bad'),label));
+  if(!available&&!current)box.append(el('p',null,u.detail||'Le relevé du serveur est indisponible.'));
+  else box.append(el('p',null,'État des paquets APT du serveur Ubuntu. Aucune mise à jour n’est lancée depuis DockPage.'));
+  box.append(el('p','metadata',u.checkedAt?'Dernière vérification : '+new Date(u.checkedAt*1000).toLocaleString('fr-FR'):'Aucune vérification enregistrée.'));
+}
 
 function render(){
-  if(!D)return;
   const focused=document.activeElement?.dataset.focus;
   const restoreFocus=()=>{if(focused){const target=[...document.querySelectorAll('[data-focus]')].find(e=>e.dataset.focus===focused);if(target)target.focus({preventScroll:true})}};
+  const services=activePage==='services';
+  $('#services-view').hidden=!services;$('#ubuntu-view').hidden=services;
+  $('#services-tab').setAttribute('aria-selected',String(services));$('#ubuntu-tab').setAttribute('aria-selected',String(!services));
+  $('#services-tab').tabIndex=services?0:-1;$('#ubuntu-tab').tabIndex=services?-1:0;
+  $('.search').hidden=!services;$('#edit').hidden=!services;
+  $('#refresh').title=services?'Relire Portainer maintenant':'Relire le dernier relevé du serveur';
+  $('#refresh').setAttribute('aria-label',services?'Actualiser la liste des conteneurs':'Relire le dernier relevé du serveur Ubuntu');
+  $('#rlbl').textContent=services?'Actualiser':'Relire';
+  if(!services){renderUbuntu();restoreFocus();return}
+  if(!D){$('#msg').replaceChildren(banner('bad','Impossible de joindre le tableau de bord','Vérifie que le conteneur DockPage est bien démarré.'));restoreFocus();return}
   const envSelect=$('#environment');
   if(activeEnv&&!D.environments.some(e=>String(e.id)===activeEnv))activeEnv='';
   const envOptions=JSON.stringify(D.environments.map(env=>[String(env.id),env.label||env.name]));
@@ -1167,15 +1241,20 @@ $('#esave').onclick=async()=>{
 };
 
 /* Barre du haut */
+function openPage(page){activePage=page;store.set('dp-page',page);render()}
+$('#services-tab').onclick=()=>openPage('services');$('#ubuntu-tab').onclick=()=>openPage('ubuntu');
+$('.main-tabs').onkeydown=e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
+  e.preventDefault();const page=activePage==='services'?'ubuntu':'services';openPage(page);$('#'+page+'-tab').focus()}};
 $('#edit').onclick=()=>{edit=!edit;$('#environment').disabled=edit;$('#edit').textContent=edit?'✓ Terminer':'✏️ Personnaliser';$('#edit').classList.toggle('primary',!edit);$('#editbar').hidden=!edit;render()};
 $('#q').oninput=render;
 $('#environment').onchange=e=>{activeEnv=e.target.value;render()};
 $('#close-details').onclick=closeDetails;
 $('#refresh').onclick=async()=>{
   const b=$('#refresh'),l=$('#rlbl');b.disabled=true;b.classList.add('spin');l.textContent='Actualisation…';
-  try{await fetch('api/refresh',{method:'POST'});await load();l.textContent='À jour ✓'}
+  try{if(activePage==='services'){const r=await fetch('api/refresh',{method:'POST'});if(!r.ok)throw Error('Actualisation impossible')}
+    if(!await load())throw Error('Lecture impossible');l.textContent=activePage==='services'?'Actualisé ✓':'Relevé relu ✓'}
   catch(e){l.textContent='Échec'}
-  finally{b.disabled=false;b.classList.remove('spin');setTimeout(()=>{l.textContent='Actualiser'},2000)}};
+  finally{b.disabled=false;b.classList.remove('spin');setTimeout(()=>{l.textContent=activePage==='services'?'Actualiser':'Relire'},2000)}};
 $('#theme').onclick=()=>{const cur=document.documentElement.dataset.theme||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'),next=cur==='dark'?'light':'dark';
   document.documentElement.dataset.theme=next;store.set('dp-theme',next)};
 document.addEventListener('keydown',e=>{
@@ -1183,6 +1262,7 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='Escape'&&document.activeElement===$('#q')){$('#q').value='';render();$('#q').blur()}
   else if(e.key==='Escape'&&selectedKey&&!document.querySelector('dialog[open]'))closeDetails();});
 hello();setInterval(hello,30000);
+if(activePage==='ubuntu')render();
 load();setInterval(load,5000);
 </script></body></html>"""
 
