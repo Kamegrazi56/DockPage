@@ -789,6 +789,10 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
 .ubuntu-table th{color:var(--muted);font-size:.8rem}
 .ubuntu-table td:first-child{font-weight:700}
 .ubuntu-table td small{display:block;margin-top:3px;color:var(--muted);font-weight:400}
+.ubuntu-manual{margin-top:24px;padding:18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--bg)}
+.ubuntu-manual h3{margin:0 0 8px}
+.ubuntu-manual p{margin:8px 0}
+.ubuntu-manual pre{margin:12px 0;padding:12px;overflow-x:auto;border:1px solid var(--line);border-radius:7px;background:var(--surface)}
 [hidden]{display:none!important}
 #group-filters{display:flex;gap:24px;overflow-x:auto;max-width:100%;border-bottom:1px solid var(--line)}
 .group-filter{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:12px 2px;cursor:pointer;white-space:nowrap;font-size:1rem}
@@ -869,6 +873,13 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
     <div class="ubuntu-card">
       <h2>Mises à jour du serveur Ubuntu</h2>
       <div id="ubuntu-status"></div>
+      <section class="ubuntu-manual" aria-labelledby="ubuntu-manual-title">
+        <h3 id="ubuntu-manual-title">Mettre à jour manuellement</h3>
+        <p>Dans le terminal du serveur Ubuntu, après avoir vérifié une sauvegarde du serveur, lance ces commandes l’une après l’autre :</p>
+        <pre><code>sudo apt update
+sudo apt upgrade</code></pre>
+        <p>La seconde commande affiche les changements et demande confirmation. Des services peuvent redémarrer pendant la mise à jour.</p>
+      </section>
       <label class="ubuntu-filter" id="ubuntu-filter-wrap" hidden>Rechercher un paquet
         <input id="ubuntu-filter" type="search" placeholder="Nom du paquet…">
       </label>

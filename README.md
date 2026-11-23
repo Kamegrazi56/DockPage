@@ -58,6 +58,10 @@ l’onglet affiche **Vérification impossible** au lieu de déclarer le serveur 
 Ce sont des paquets Ubuntu : certains sont des services, d’autres des bibliothèques
 ou le noyau. La liste ne prétend pas identifier les services à redémarrer.
 Le bouton **Relire** charge le dernier relevé ; il ne déclenche pas un contrôle APT.
+L’onglet affiche aussi les commandes `sudo apt update` et `sudo apt upgrade` à saisir
+dans le terminal du serveur après vérification d’une sauvegarde du serveur. La seconde commande
+demande confirmation et peut redémarrer des services. DockPage affiche ces commandes
+comme aide ; il ne les exécute pas.
 Un ancien relevé contenant seulement le nombre reste lisible, mais il faut relancer
 le nouveau script sur l’hôte pour obtenir le détail des paquets.
 
