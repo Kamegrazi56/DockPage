@@ -9,7 +9,11 @@ import tempfile
 import time
 
 
-PACKAGE_LINE = re.compile(r"^[^\s/]+/\S+\s+\S+\s+\S+\s+\[upgradable from: .+\]$")
+PACKAGE_LINE = re.compile(
+    r"^(?P<name>[^\s/]+)/(?P<source>\S+)\s+"
+    r"(?P<candidate>\S+)\s+(?P<architecture>\S+)\s+"
+    r"\[upgradable from: (?P<installed>[^\]]+)\]$"
+)
 
 
 def check_updates():
@@ -20,9 +24,13 @@ def check_updates():
                             capture_output=True, text=True, timeout=60, check=True)
     lines = [line.strip() for line in result.stdout.splitlines()
              if line.strip() and not line.startswith("Listing...")]
-    if any(not PACKAGE_LINE.fullmatch(line) for line in lines):
-        raise ValueError("Sortie APT inattendue")
-    return len(lines)
+    packages = []
+    for line in lines:
+        match = PACKAGE_LINE.fullmatch(line)
+        if not match:
+            raise ValueError("Sortie APT inattendue")
+        packages.append(match.groupdict())
+    return sorted(packages, key=lambda package: package["name"].casefold())
 
 
 def write_report(path, report):
@@ -48,8 +56,8 @@ def main():
         print("Usage: ubuntu_status.py /chemin/vers/data/ubuntu-updates.json", file=sys.stderr)
         return 2
     try:
-        count = check_updates()
-        report = {"checkedAt": int(time.time()), "count": count}
+        packages = check_updates()
+        report = {"checkedAt": int(time.time()), "count": len(packages), "packages": packages}
         code = 0
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print("Vérification APT impossible : %s" % error, file=sys.stderr)

@@ -34,13 +34,21 @@ class UbuntuReportTest(unittest.TestCase):
         self.assertEqual(app.ubuntu_status()["state"], "unknown")
         self.write({"checkedAt": time.time() + 600, "count": 0})
         self.assertEqual(app.ubuntu_status()["state"], "unknown")
+        self.write({"checkedAt": time.time(), "count": 2, "packages": []})
+        self.assertEqual(app.ubuntu_status()["state"], "unknown")
 
     def test_fresh_current_and_available(self):
-        self.write({"checkedAt": time.time(), "count": 0})
+        self.write({"checkedAt": time.time(), "count": 0, "packages": []})
         self.assertEqual(app.ubuntu_status()["state"], "current")
-        self.write({"checkedAt": time.time(), "count": 3})
-        self.assertEqual(app.ubuntu_status()["count"], 3)
+        packages = [{"name": "openssl", "installed": "2.9", "candidate": "3.0",
+                     "source": "jammy-security", "architecture": "amd64"}]
+        self.write({"checkedAt": time.time(), "count": 1, "packages": packages})
+        self.assertEqual(app.ubuntu_status()["count"], 1)
         self.assertEqual(app.ubuntu_status()["state"], "available")
+        self.assertEqual(app.ubuntu_status()["packages"], packages)
+        self.write({"checkedAt": time.time(), "count": 90})
+        self.assertEqual(app.ubuntu_status()["state"], "available")
+        self.assertIsNone(app.ubuntu_status()["packages"])
 
     def test_stale_and_failed_check_are_unknown(self):
         self.write({"checkedAt": time.time() - app.UBUNTU_STATUS_MAX_AGE - 1, "count": 0})
@@ -49,7 +57,9 @@ class UbuntuReportTest(unittest.TestCase):
         self.assertEqual(app.ubuntu_status()["state"], "unknown")
 
     def test_api_exposes_host_status_even_without_portainer(self):
-        self.write({"checkedAt": time.time(), "count": 2})
+        packages = [{"name": "openssl", "installed": "2.9", "candidate": "3.0",
+                     "source": "jammy-security", "architecture": "amd64"}]
+        self.write({"checkedAt": time.time(), "count": 1, "packages": packages})
         server = app.ThreadingHTTPServer(("127.0.0.1", 0), app.Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -60,14 +70,19 @@ class UbuntuReportTest(unittest.TestCase):
             with urllib.request.urlopen("http://127.0.0.1:%d/api/data" % server.server_port) as response:
                 data = json.load(response)
         self.assertEqual(data["ubuntu"]["state"], "available")
-        self.assertEqual(data["ubuntu"]["count"], 2)
+        self.assertEqual(data["ubuntu"]["count"], 1)
+        self.assertEqual(data["ubuntu"]["packages"], packages)
 
 
 class HostCheckTest(unittest.TestCase):
-    def test_counts_upgradable_packages_after_refresh(self):
+    def test_lists_upgradable_packages_after_refresh(self):
         output = "Listing... Done\nopenssl/jammy-updates 3.0 amd64 [upgradable from: 2.9]\nlinux/jammy-security 6.0 amd64 [upgradable from: 5.9]\n"
         with patch.object(ubuntu_status.subprocess, "run", side_effect=[SimpleNamespace(), SimpleNamespace(stdout=output)]) as run:
-            self.assertEqual(ubuntu_status.check_updates(), 2)
+            packages = ubuntu_status.check_updates()
+            self.assertEqual([p["name"] for p in packages], ["linux", "openssl"])
+            self.assertEqual(packages[1]["installed"], "2.9")
+            self.assertEqual(packages[1]["candidate"], "3.0")
+            self.assertEqual(packages[1]["source"], "jammy-updates")
             self.assertEqual(run.call_args_list[0].args[0][0], "apt-get")
             self.assertEqual(run.call_args_list[1].args[0], ["apt", "list", "--upgradable"])
 
@@ -75,6 +90,19 @@ class HostCheckTest(unittest.TestCase):
         with patch.object(ubuntu_status.subprocess, "run", side_effect=[SimpleNamespace(), SimpleNamespace(stdout="unexpected\n")]):
             with self.assertRaises(ValueError):
                 ubuntu_status.check_updates()
+
+    def test_successful_check_writes_package_details(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "ubuntu-updates.json")
+            packages = [{"name": "openssl", "installed": "2.9", "candidate": "3.0",
+                         "source": "jammy-security", "architecture": "amd64"}]
+            with patch.object(ubuntu_status, "check_updates", return_value=packages), \
+                    patch.object(ubuntu_status.sys, "argv", ["ubuntu_status.py", path]):
+                self.assertEqual(ubuntu_status.main(), 0)
+            with open(path, encoding="utf-8") as f:
+                report = json.load(f)
+            self.assertEqual(report["count"], 1)
+            self.assertEqual(report["packages"], packages)
 
     def test_failed_refresh_publishes_unknown_state(self):
         with tempfile.TemporaryDirectory() as folder:

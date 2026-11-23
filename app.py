@@ -57,7 +57,18 @@ def ubuntu_status():
         count = report.get("count")
         if type(count) is not int or not 0 <= count <= 100000:
             raise ValueError("Nombre de mises à jour invalide")
-        return {"state": "available" if count else "current", "count": count, "checkedAt": checked}
+        packages = report.get("packages")
+        if packages is not None:
+            fields = ("name", "installed", "candidate", "source", "architecture")
+            if (not isinstance(packages, list) or len(packages) != count
+                    or any(not isinstance(package, dict)
+                           or any(type(package.get(field)) is not str
+                                  or not package[field] or len(package[field]) > 300
+                                  for field in fields)
+                           for package in packages)):
+                raise ValueError("Liste de mises à jour invalide")
+        return {"state": "available" if count else "current", "count": count,
+                "packages": packages, "checkedAt": checked}
     except FileNotFoundError:
         return {"state": "unknown", "detail": "Aucun relevé Ubuntu disponible. Configurer le contrôle sur le serveur."}
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
@@ -765,11 +776,19 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
 .main-tabs{display:flex;gap:24px;border-bottom:1px solid var(--line);margin-bottom:24px}
 .main-tab{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:12px 2px;cursor:pointer;font-size:1rem}
 .main-tab[aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
-.ubuntu-card{max-width:700px;padding:24px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow)}
+.ubuntu-card{max-width:1000px;padding:24px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);box-shadow:var(--shadow)}
 .ubuntu-card h2{font:700 1.8rem/1.2 Georgia,serif;margin:0 0 16px}
 .ubuntu-card p{color:var(--muted);line-height:1.5}
 .ubuntu-card .pill{font-size:.9rem;padding:7px 12px}
 .ubuntu-card .metadata{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);font-size:.85rem}
+.ubuntu-filter{display:block;margin:24px 0 12px;font-weight:600}
+.ubuntu-filter input{display:block;width:min(100%,400px);margin-top:6px;padding:10px 12px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--text)}
+.ubuntu-table-wrap{overflow-x:auto}
+.ubuntu-table{width:100%;min-width:560px;border-collapse:collapse;text-align:left;font-size:.9rem}
+.ubuntu-table th,.ubuntu-table td{padding:12px 10px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
+.ubuntu-table th{color:var(--muted);font-size:.8rem}
+.ubuntu-table td:first-child{font-weight:700}
+.ubuntu-table td small{display:block;margin-top:3px;color:var(--muted);font-weight:400}
 [hidden]{display:none!important}
 #group-filters{display:flex;gap:24px;overflow-x:auto;max-width:100%;border-bottom:1px solid var(--line)}
 .group-filter{border:0;border-bottom:3px solid transparent;background:transparent;color:var(--muted);padding:12px 2px;cursor:pointer;white-space:nowrap;font-size:1rem}
@@ -849,7 +868,11 @@ h1{font-family:Georgia,serif;font-size:2rem;color:var(--accent)}
   <section id="ubuntu-view" role="tabpanel" aria-labelledby="ubuntu-tab" hidden>
     <div class="ubuntu-card">
       <h2>Mises à jour du serveur Ubuntu</h2>
-      <div id="ubuntu-status" role="status" aria-live="polite"></div>
+      <div id="ubuntu-status"></div>
+      <label class="ubuntu-filter" id="ubuntu-filter-wrap" hidden>Rechercher un paquet
+        <input id="ubuntu-filter" type="search" placeholder="Nom du paquet…">
+      </label>
+      <div id="ubuntu-packages"></div>
     </div>
   </section>
 </main>
@@ -929,15 +952,38 @@ async function load(){try{const r=await fetch('api/data');if(!r.ok)throw Error('
     return false}}
 
 function renderUbuntu(){
-  const box=$('#ubuntu-status'),u=D?.ubuntu||{state:'unknown',detail:'Impossible de joindre DockPage.'};
-  box.replaceChildren();
+  const box=$('#ubuntu-status'),list=$('#ubuntu-packages');
+  const u=D?.ubuntu||{state:'unknown',detail:'Impossible de joindre DockPage.'};
+  box.replaceChildren();list.replaceChildren();
   const available=u.state==='available',current=u.state==='current';
+  const packages=available&&Array.isArray(u.packages)?u.packages:null;
+  $('#ubuntu-filter-wrap').hidden=!packages?.length;
   const label=available?u.count+' mise'+(u.count>1?'s':'')+' à jour disponible'+(u.count>1?'s':''):
     current?'Serveur à jour':'Vérification impossible';
   box.append(el('span','pill '+(available?'warn':current?'ok':'bad'),label));
   if(!available&&!current)box.append(el('p',null,u.detail||'Le relevé du serveur est indisponible.'));
   else box.append(el('p',null,'État des paquets APT du serveur Ubuntu. Aucune mise à jour n’est lancée depuis DockPage.'));
   box.append(el('p','metadata',u.checkedAt?'Dernière vérification : '+new Date(u.checkedAt*1000).toLocaleString('fr-FR'):'Aucune vérification enregistrée.'));
+  if(available&&!packages){
+    list.append(el('p',null,'Le relevé actuel contient seulement le nombre de mises à jour. Réinstalle le script de contrôle sur le serveur, puis relance-le pour voir les paquets.'));
+    return;
+  }
+  if(!packages)return;
+  const q=$('#ubuntu-filter').value.trim().toLocaleLowerCase('fr-FR');
+  const visible=packages.filter(p=>!q||(p.name+' '+p.installed+' '+p.candidate).toLocaleLowerCase('fr-FR').includes(q));
+  list.append(el('h3',null,'Paquets à mettre à jour'));
+  if(q)list.append(el('p',null,visible.length+' paquet'+(visible.length>1?'s':'')+' affiché'+(visible.length>1?'s':'')+' sur '+packages.length));
+  if(!visible.length){list.append(el('p',null,'Aucun paquet ne correspond à la recherche.'));return}
+  const wrap=el('div','ubuntu-table-wrap'),table=el('table','ubuntu-table'),head=el('thead'),row=el('tr');
+  for(const title of ['Paquet','Version installée','Version proposée']){const th=el('th',null,title);th.scope='col';row.append(th)}
+  head.append(row);table.append(head);
+  const body=el('tbody');
+  for(const p of visible){
+    const tr=el('tr'),name=el('td');
+    name.append(document.createTextNode(p.name),el('small',null,'Source APT : '+p.source+' · '+p.architecture));
+    tr.append(name,el('td',null,p.installed),el('td',null,p.candidate));body.append(tr);
+  }
+  table.append(body);wrap.append(table);list.append(wrap);
 }
 
 function render(){
@@ -1247,6 +1293,7 @@ $('.main-tabs').onkeydown=e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){
   e.preventDefault();const page=activePage==='services'?'ubuntu':'services';openPage(page);$('#'+page+'-tab').focus()}};
 $('#edit').onclick=()=>{edit=!edit;$('#environment').disabled=edit;$('#edit').textContent=edit?'✓ Terminer':'✏️ Personnaliser';$('#edit').classList.toggle('primary',!edit);$('#editbar').hidden=!edit;render()};
 $('#q').oninput=render;
+$('#ubuntu-filter').oninput=renderUbuntu;
 $('#environment').onchange=e=>{activeEnv=e.target.value;render()};
 $('#close-details').onclick=closeDetails;
 $('#refresh').onclick=async()=>{

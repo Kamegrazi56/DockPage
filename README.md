@@ -50,10 +50,16 @@ Pour que Portainer puisse télécharger l'image sans identifiants, le paquet doi
 ## Onglet Serveur Ubuntu
 
 L’onglet **Serveur Ubuntu** indique si des mises à jour de paquets APT sont disponibles,
-leur nombre et l’heure du dernier contrôle. Il ne lance aucune installation. Si le
+leur nombre, le nom des paquets concernés, leurs versions installées et proposées,
+leur source APT et l’heure du dernier contrôle. Un champ de recherche permet de
+retrouver un paquet dans la liste. Il ne lance aucune installation. Si le
 relevé manque, est illisible, date de plus de 24 heures ou signale une erreur APT,
 l’onglet affiche **Vérification impossible** au lieu de déclarer le serveur à jour.
+Ce sont des paquets Ubuntu : certains sont des services, d’autres des bibliothèques
+ou le noyau. La liste ne prétend pas identifier les services à redémarrer.
 Le bouton **Relire** charge le dernier relevé ; il ne déclenche pas un contrôle APT.
+Un ancien relevé contenant seulement le nombre reste lisible, mais il faut relancer
+le nouveau script sur l’hôte pour obtenir le détail des paquets.
 
 Portainer ne fournit pas l’état des paquets du système hôte. Sur le serveur Ubuntu,
 installer le script `ubuntu_status.py` et le lancer régulièrement. Le chemin ci-dessous
@@ -73,10 +79,13 @@ Ajouter cette ligne à la crontab de `root` pour un contrôle toutes les six heu
 ```
 
 Le script exécute `apt-get update`, puis compte les paquets signalés par
-`apt list --upgradable`. Il écrit seulement une date et un nombre (ou une erreur)
+`apt list --upgradable`. Il écrit la date, le nombre et la liste des paquets (ou une erreur)
 dans le fichier partagé, sans installer de paquets. Il faut que ce dossier soit
 monté dans DockPage sous `/data`, comme dans la stack fournie. Le contrôle concerne
 l’hôte sur lequel le script s’exécute, et non les autres environnements Portainer.
+Après une mise à jour du code de DockPage, relancer les deux commandes `sudo install`
+et `sudo python3` ci-dessus pour remplacer le script déjà installé et produire
+un nouveau relevé ; la ligne de la crontab ne change pas.
 
 ## Catégories
 
