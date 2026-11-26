@@ -195,8 +195,10 @@ L'état du conteneur reste affiché séparément :
 un conteneur en marche peut héberger un service inaccessible. Le résumé signale aussi les échecs
 pour les services surveillés dont l'environnement Portainer est indisponible.
 
-Dans **Icône du service → Réglages → Intervalle de vérification (secondes)**, régler chaque service de 10 à 86400 secondes.
-Laisser le champ vide utilise `MONITOR_INTERVAL_SECONDS` (60 secondes par défaut, minimum 10).
+Dans **Icône du service → Réglages → Intervalle de vérification**, saisir séparément les jours,
+heures, minutes et secondes, de 10 secondes à 1 jour. Les champs non renseignés comptent pour zéro.
+Laisser les quatre champs vides utilise `MONITOR_INTERVAL_SECONDS` (60 secondes par défaut, minimum 10).
+Le panneau de détails affiche aussi l'intervalle dans ces quatre unités.
 Chaque service est contrôlé indépendamment lorsque son intervalle depuis le dernier résultat
 est écoulé ; changer l'intervalle conserve l'historique. Le serveur recherche les contrôles dus
 chaque seconde, avec un délai possible lorsque les contrôles précédents sont encore en cours.

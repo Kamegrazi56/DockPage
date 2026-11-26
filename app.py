@@ -749,6 +749,13 @@ dialog label{margin-top:12px;font-weight:600;font-size:.88rem}
 dialog label small{display:block;font-weight:400;color:var(--muted)}
 dialog input[type=text],dialog select{width:100%;margin-top:5px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg)}
 dialog input[type=text]:focus,dialog select:focus{border-color:var(--accent);outline:3px solid color-mix(in srgb,var(--accent) 25%,transparent);outline-offset:0}
+.interval-fields{border:0;margin:12px 0 0;padding:0;min-width:0}
+.interval-fields legend{font-weight:600;font-size:.88rem}
+.interval-fields small{display:block;color:var(--muted);font-size:.8rem}
+.interval-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.interval-grid label{min-width:0;margin-top:8px}
+.interval-grid input{box-sizing:border-box;width:100%;margin-top:5px;padding:10px 6px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--text)}
+.interval-grid input:focus{border-color:var(--accent);outline:3px solid color-mix(in srgb,var(--accent) 25%,transparent)}
 dialog .chk{display:flex;gap:10px;align-items:center;font-weight:500}
 dialog .chk input{accent-color:var(--accent);width:18px;height:18px;margin:0}
 .row{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
@@ -897,7 +904,16 @@ sudo apt upgrade</code></pre>
   <label class="chk"><input type="checkbox" id="f_hidden">Masquer ce conteneur</label>
   <label>Surveillance du service<select id="f_monitor"><option value="">Désactivée</option><option value="http">HTTP / HTTPS</option><option value="tcp">Connexion TCP</option></select></label>
   <label>Adresse à surveiller<small>Vide = lien de la carte ou premier port détecté. HTTP : réponse 200–399 ; TCP : connexion au port.</small><input type="text" id="f_monitorUrl" placeholder="https://service/health ou tcp://192.168.1.210:5432"></label>
-  <label>Intervalle de vérification (secondes)<small>De 10 à 86400 secondes. Vide = valeur par défaut du serveur. Appliqué après le dernier contrôle.</small><input type="number" id="f_monitorInterval" min="10" max="86400" step="1"></label>
+  <fieldset class="interval-fields"><legend>Intervalle de vérification</legend>
+    <small id="interval-help">De 10 secondes à 1 jour. Laisser les quatre champs vides utilise la valeur du serveur. Appliqué après le dernier contrôle.</small>
+    <div class="interval-grid">
+      <label>Jour<input type="number" id="f_intervalDays" min="0" max="1" step="1" placeholder="0" aria-describedby="interval-help"></label>
+      <label>Heure<input type="number" id="f_intervalHours" min="0" max="23" step="1" placeholder="0" aria-describedby="interval-help"></label>
+      <label>Minute<input type="number" id="f_intervalMinutes" min="0" max="59" step="1" placeholder="0" aria-describedby="interval-help"></label>
+      <label>Seconde<input type="number" id="f_intervalSeconds" min="0" max="59" step="1" placeholder="0" aria-describedby="interval-help"></label>
+    </div>
+    <small id="interval-default"></small>
+  </fieldset>
   <p id="itemError" role="alert"></p>
   <div class="row"><button type="button" class="btn danger" id="reset">Réinitialiser</button><button type="button" class="btn" id="cancel">Annuler</button><button class="btn primary" id="save" value="ok">Enregistrer</button></div>
 </form></dialog>
@@ -921,6 +937,9 @@ sudo apt upgrade</code></pre>
 const $=s=>document.querySelector(s);let D=null,edit=false,cur=null,selectedKey,activeGroup='',activeEnv='';
 const updating=new Set(),updateResults=new Map();
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
+const intervalParts=seconds=>[Math.floor(seconds/86400),Math.floor(seconds%86400/3600),Math.floor(seconds%3600/60),seconds%60];
+const intervalText=seconds=>intervalParts(seconds).map((n,i)=>n+' '+['j','h','min','s'][i]).join(' · ');
+const intervalFields=['Days','Hours','Minutes','Seconds'].map(unit=>$('#f_interval'+unit));
 const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
 let activePage=store.get('dp-page','services')==='ubuntu'?'ubuntu':'services';
 let showAll=!!store.get('dp-all',false);const collapsed=new Set(store.get('dp-collapsed',[]));
@@ -1166,7 +1185,7 @@ function renderServiceDetails({c,o,url,env,st}){
         const status=el('span','pill '+(fresh?(m.state==='up'?'ok':'bad'):''),fresh?(m.state==='up'?'En ligne':'Hors ligne'):'Contrôle en attente');
         status.title=fresh?m.detail+' — '+new Date(m.checked*1000).toLocaleString(): 'En attente d’un contrôle récent';
         const box=el('div','monitor'),interval=o.monitorInterval||D.monitorInterval;box.append(status);
-        box.append(el('span','since',o.monitor.toUpperCase()+' · Toutes les '+interval+' s'));
+        box.append(el('span','since',o.monitor.toUpperCase()+' · Toutes les '+intervalText(interval)));
         if(m){
           box.append(el('span','since','Dernier contrôle : '+new Date(m.checked*1000).toLocaleString()+' · '+m.detail));
           const next=m.checked+interval;
@@ -1249,13 +1268,20 @@ function openItem(c,o){cur=c;$('#dt').textContent=c.key;
   const sel=$('#f_group');sel.replaceChildren(new Option('Aucune (selon l\'environnement)',''));
   for(const k of D.categories||[])sel.append(new Option(k,k));
   for(const k of ['name','url','group','icon','monitor','monitorUrl'])$('#f_'+k).value=o[k]||'';
-  $('#f_monitorInterval').value=o.monitorInterval||'';
-  $('#f_monitorInterval').placeholder=D.monitorInterval+' (défaut)';
+  const parts=o.monitorInterval?intervalParts(o.monitorInterval):['','','',''];
+  intervalFields.forEach((field,i)=>field.value=parts[i]);
+  $('#interval-default').textContent='Valeur du serveur : '+intervalText(D.monitorInterval)+'.';
   $('#f_name').placeholder=c.name;
   $('#itemError').textContent='';
   $('#f_hidden').checked=!!o.hidden;$('#dlg').showModal()}
 async function post(data){try{const r=await fetch('api/item',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:cur.key,data})});if(!r.ok)throw Error((await r.json()).error||'Enregistrement impossible');$('#dlg').close();load()}catch(e){$('#itemError').textContent=e.message}}
-$('#save').onclick=e=>{e.preventDefault();if(!$('#f_monitorInterval').reportValidity())return;const d={monitorInterval:$('#f_monitorInterval').value?Number($('#f_monitorInterval').value):null,hidden:$('#f_hidden').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
+$('#save').onclick=e=>{e.preventDefault();
+  for(const field of intervalFields)if(!field.reportValidity())return;
+  const entered=intervalFields.some(field=>field.value!=='');
+  const interval=entered?intervalFields.reduce((total,field,i)=>total+Number(field.value)*[86400,3600,60,1][i],0):null;
+  if(entered&&(interval<10||interval>86400)){$('#itemError').textContent='Choisir un intervalle de 10 secondes à 1 jour.';return}
+  $('#itemError').textContent='';
+  const d={monitorInterval:interval,hidden:$('#f_hidden').checked};for(const k of ['name','url','group','icon','monitor','monitorUrl'])d[k]=$('#f_'+k).value.trim();post(d)};
 $('#reset').onclick=()=>post(null);$('#cancel').onclick=()=>$('#dlg').close();
 
 /* Fenêtre « Catégories » */
